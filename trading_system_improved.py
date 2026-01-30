@@ -13,6 +13,21 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, class
 import joblib
 from pathlib import Path
 
+
+def enviar_telegram(mensaje):
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("⚠️ Telegram no configurado")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    r = requests.post(url, data={
+        "chat_id": chat_id,
+        "text": mensaje
+    })
+    print("📨 Telegram status:", r.status_code)
+
 warnings.filterwarnings('ignore')
 
 # ============================================
@@ -896,7 +911,18 @@ def main():
                 print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
                 print(f"    TP: ${señal_actual['take_profit']:,.2f}")
                 print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
-        
+              
+                enviar_telegram(
+                    f"📊 SEÑAL {ticker}\n"
+                    f"Dirección: {señal_actual['señal']}\n"
+                    f"Probabilidad: {señal_actual['probabilidad']:.2%}\n"
+                    f"Confianza: {señal_actual['confianza']:.2%}\n"
+                    f"Precio: {señal_actual['precio']:.2f}\n"
+                    f"SL: {señal_actual['stop_loss']:.2f}\n"
+                    f"TP: {señal_actual['take_profit']:.2f}\n"
+                    f"R:R: {señal_actual['ratio_rr']:.2f}"
+                )
+
         # 6. Guardar modelos
         if viable:
             sistema.guardar_modelos()
@@ -928,32 +954,6 @@ def main():
                   f"PF {m['profit_factor']:.2f}")
     
     return resultados_globales
-
-
-    def enviar_telegram(mensaje):
-        token = os.getenv("TELEGRAM_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        if not token or not chat_id:
-            return
-            
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, data={
-            "chat_id": chat_id,
-            "text": mensaje
-        })
-
-
-
-    enviar_telegram(
-    f"""
-📊 SEÑAL {ticker}
-Dirección: {signal}
-Confianza: {confidence:.2f}
-Entrada: {price}
-SL: {sl}
-TP: {tp}
-"""
-)
 
 
 if __name__ == "__main__":
