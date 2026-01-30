@@ -797,7 +797,22 @@ class SistemaTradingTicker:
             
             # Calcular features
             df_reciente = IndicadoresTecnicos.calcular_features(df_reciente)
-            
+
+            # === MEAN REVERSION FILTER ===
+            df_reciente["ret_log"] = np.log(df_reciente["Close"] / df_reciente["Close"].shift(1))
+
+            window = 72  # 48h
+            df_reciente["mu"] = df_reciente["ret_log"].rolling(window).mean()
+            df_reciente["sigma"] = df_reciente["ret_log"].rolling(window).std()
+            df_reciente["z_mr"] = (df_reciente["ret_log"] - df_reciente["mu"]) / df_reciente["sigma"]
+
+            z_actual = df_reciente["z_mr"].iloc[-1]
+            evento = None
+            if z_actual > 2.2:
+                evento = "SHORT"
+            elif z_actual < -2.2:
+                evento = "LONG"
+
             # Obtener predicciones
             predicciones = {}
             for horizonte, modelo in self.modelos.items():
@@ -841,7 +856,9 @@ class SistemaTradingTicker:
                 'ratio_rr': abs(tp - precio) / abs(precio - sl),
                 'predicciones_detalle': predicciones,
                 'rsi': ultima_vela.get('RSI', 50),
-                'tendencia': 'ALCISTA' if ultima_vela.get('tendencia', 0) == 1 else 'BAJISTA'
+                'tendencia': 'ALCISTA' if ultima_vela.get('tendencia', 0) == 1 else 'BAJISTA',
+                'z_mr': float(z_actual),
+                'evento_mr': evento,
             }
             
         except Exception as e:
@@ -917,7 +934,11 @@ def main():
         if viable:
            señal_actual = sistema.analizar_tiempo_real()
 
-           if señal_actual and señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN:
+           if (señal_actual and
+               señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN and
+               señal_actual['evento_mr'] is not None and
+               señal_actual['evento_mr'] == señal_actual['señal']):
+
 
                print(f"\n  🚨 SEÑAL DETECTADA:")
                print(f"    Dirección: {señal_actual['señal']}")
@@ -948,6 +969,8 @@ def main():
                        f"🛑 SL: {señal_actual['stop_loss']:.2f}\n"
                        f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
                        f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}"
+                       f"\n📐 Z-Score MR: {señal_actual['z_mr']:.2f}"
+
                    )
 
                    guardar_ultima_senal({
