@@ -45,168 +45,65 @@ def enviar_telegram(mensaje):
 warnings.filterwarnings('ignore')
 
 # ============================================
-# CONFIGURACIÓN POR CLASE DE ACTIVO
+# CONFIGURACIÓN MEJORADA
 # ============================================
 
 class TradingConfig:
-    """Configuración inteligente por tipo de activo"""
+    """Configuración centralizada del sistema"""
     
-    # Timezone común
+    # Timezone
     TIMEZONE = pytz.timezone('America/Bogota')
     
-    # Lista completa de activos (agrega aquí todos los que quieras)
+    # Períodos de tiempo (CORREGIDO)
+    INTERVALO = "1h"
+    DIAS_ENTRENAMIENTO = 365  # 1 año de datos históricos
+    DIAS_VALIDACION = 90      # 3 meses para validación
+    DIAS_BACKTEST = 30        # 1 mes para backtesting final
+    
+    # Activos
     ACTIVOS = [
-        # CRIPTO
-        "BTC-USD",
-        "ETH-USD",
-        "SOL-USD",
-        # ACCIONES
-        "AAPL",
-        "MSFT",
-        "TSLA",
-        "NVDA",
-        # ÍNDICES
-        "SPY",
-        "QQQ",
-        # FOREX
-        "EURUSD=X",
-        "GBPUSD=X",
-        # COMMODITIES
-        "GC=F",     # Oro
-        "CL=F",     # Petróleo
+        "BTC-USD"
     ]
     
-    # Configuración BASE común
-    BASE_CONFIG = {
-        'TIMEZONE': pytz.timezone('America/Bogota'),
-        'VENTANA_VOLATILIDAD': 24,
-        'VENTANA_TENDENCIA': 50,
-        'VENTANA_RAPIDA': 12,
-        'ATR_PERIODO': 14,
-        'RSI_PERIODO': 14,
-        'RATIO_MINIMO_RR': 1.5,
-        'MAX_RIESGO_POR_OPERACION': 0.02,
-        'N_FOLDS_WF': 3,
-        'MIN_MUESTRAS_ENTRENAMIENTO': 500,
-        'MIN_MUESTRAS_CLASE': 20,
-        'MODELOS_DIR': Path("modelos_trading"),
-    }
+    # Parámetros técnicos
+    VENTANA_VOLATILIDAD = 24  # 24 horas
+    VENTANA_TENDENCIA = 50
+    VENTANA_RAPIDA = 12
+    ATR_PERIODO = 14
+    RSI_PERIODO = 14
     
-    # CONFIGURACIONES ESPECÍFICAS POR CLASE
-    CONFIG_CLASES = {
-        'CRYPTO': {
-            'INTERVALO': "1h",
-            'DIAS_ENTRENAMIENTO': 180,      # 6 meses
-            'DIAS_VALIDACION': 60,
-            'DIAS_BACKTEST': 30,
-            'HORIZONTES': [2, 4, 6, 12, 18],  # Más cortos
-            'MULTIPLICADOR_SL': 2.0,
-            'MULTIPLICADOR_TP': 3.0,
-            'UMBRAL_PROBABILIDAD_MIN': 0.70,
-            'UMBRAL_CONFIANZA_MIN': 0.65,
-            'UMBRAL_MR': 2.2,  # Mean reversion más sensible
-            'HORAS_DIA': 24,   # Mercado 24/7
-        },
-        'STOCKS': {
-            'INTERVALO': "1h",
-            'DIAS_ENTRENAMIENTO': 365,      # 1 año
-            'DIAS_VALIDACION': 90,
-            'DIAS_BACKTEST': 30,
-            'HORIZONTES': [4, 8, 12, 24, 40],  # Horas trading
-            'MULTIPLICADOR_SL': 1.5,
-            'MULTIPLICADOR_TP': 2.5,
-            'UMBRAL_PROBABILIDAD_MIN': 0.65,
-            'UMBRAL_CONFIANZA_MIN': 0.60,
-            'UMBRAL_MR': 2.5,  # Más conservador
-            'HORAS_DIA': 6.5,  # 9:30-16:00 EST
-        },
-        'INDICES': {
-            'INTERVALO': "1h",
-            'DIAS_ENTRENAMIENTO': 365,
-            'DIAS_VALIDACION': 90,
-            'DIAS_BACKTEST': 30,
-            'HORIZONTES': [4, 8, 12, 24, 40],
-            'MULTIPLICADOR_SL': 1.8,
-            'MULTIPLICADOR_TP': 2.8,
-            'UMBRAL_PROBABILIDAD_MIN': 0.68,
-            'UMBRAL_CONFIANZA_MIN': 0.62,
-            'UMBRAL_MR': 2.3,
-            'HORAS_DIA': 6.5,
-        },
-        'FOREX': {
-            'INTERVALO': "1h",
-            'DIAS_ENTRENAMIENTO': 365,
-            'DIAS_VALIDACION': 90,
-            'DIAS_BACKTEST': 30,
-            'HORIZONTES': [6, 12, 24, 48, 96],  # Más lentos
-            'MULTIPLICADOR_SL': 1.2,
-            'MULTIPLICADOR_TP': 2.0,
-            'UMBRAL_PROBABILIDAD_MIN': 0.60,
-            'UMBRAL_CONFIANZA_MIN': 0.55,
-            'UMBRAL_MR': 2.0,  # Más mean-reverting
-            'HORAS_DIA': 24,
-        },
-        'COMMODITIES': {
-            'INTERVALO': "1h",
-            'DIAS_ENTRENAMIENTO': 365,
-            'DIAS_VALIDACION': 90,
-            'DIAS_BACKTEST': 30,
-            'HORIZONTES': [4, 8, 12, 24, 48],
-            'MULTIPLICADOR_SL': 1.5,
-            'MULTIPLICADOR_TP': 2.5,
-            'UMBRAL_PROBABILIDAD_MIN': 0.65,
-            'UMBRAL_CONFIANZA_MIN': 0.60,
-            'UMBRAL_MR': 2.2,
-            'HORAS_DIA': 24,
-        }
-    }
+    # Horizontes de predicción (CORREGIDO - más cortos)
+    HORIZONTES = [4, 8, 12, 24, 48]  # En horas
+    
+    # Gestión de riesgo
+    MULTIPLICADOR_SL = 2.0
+    MULTIPLICADOR_TP = 3.0
+    RATIO_MINIMO_RR = 1.5
+    MAX_RIESGO_POR_OPERACION = 0.02  # 2% del capital
+    
+    # Validación
+    N_FOLDS_WF = 3
+    MIN_MUESTRAS_ENTRENAMIENTO = 500
+    MIN_MUESTRAS_CLASE = 20
+    
+    # Umbrales de trading
+    UMBRAL_PROBABILIDAD_MIN = 0.65
+    UMBRAL_CONFIANZA_MIN = 0.60
+    
+    # Persistencia
+    MODELOS_DIR = Path("modelos_trading")
     
     @classmethod
-    def detectar_clase_activo(cls, ticker):
-        """Detecta automáticamente la clase del activo"""
-        ticker_upper = ticker.upper()
-        
-        # CRIPTO
-        if any(crypto in ticker_upper for crypto in ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOT', 'BNB', 'DOGE']):
-            return 'CRYPTO'
-        
-        # ÍNDICES
-        if any(indice in ticker_upper for indice in ['SPY', 'QQQ', 'DIA', 'IWM', 'VIX']):
-            return 'INDICES'
-        
-        # FOREX
-        if any(forex in ticker_upper for forex in ['EUR', 'GBP', 'JPY', 'USD', 'CHF', 'AUD', 'NZD', 'CAD', '=X']):
-            return 'FOREX'
-        
-        # COMMODITIES
-        if any(comm in ticker_upper for comm in ['GC=', 'CL=', 'SI=', 'HG=', 'NG=', '=F']):
-            return 'COMMODITIES'
-        
-        # Por defecto, es acción
-        return 'STOCKS'
-    
-    @classmethod
-    def get_config(cls, ticker):
-        """Devuelve configuración específica para un ticker"""
-        clase = cls.detectar_clase_activo(ticker)
-        
-        # Combinar base + clase específica
-        config = cls.BASE_CONFIG.copy()
-        config.update(cls.CONFIG_CLASES.get(clase, cls.CONFIG_CLASES['STOCKS']))
-        config['CLASE'] = clase
-        
-        return config
-    
-    @classmethod
-    def get_fechas(cls, config):
-        """Calcula fechas del sistema usando configuración específica"""
+    def get_fechas(cls):
+        """Calcula fechas del sistema"""
         now = datetime.now(cls.TIMEZONE)
         return {
             'actual': now,
-            'inicio_entrenamiento': now - timedelta(days=config['DIAS_ENTRENAMIENTO'] + config['DIAS_VALIDACION'] + config['DIAS_BACKTEST']),
-            'inicio_validacion': now - timedelta(days=config['DIAS_VALIDACION'] + config['DIAS_BACKTEST']),
-            'inicio_backtest': now - timedelta(days=config['DIAS_BACKTEST'])
+            'inicio_entrenamiento': now - timedelta(days=cls.DIAS_ENTRENAMIENTO + cls.DIAS_VALIDACION + cls.DIAS_BACKTEST),
+            'inicio_validacion': now - timedelta(days=cls.DIAS_VALIDACION + cls.DIAS_BACKTEST),
+            'inicio_backtest': now - timedelta(days=cls.DIAS_BACKTEST)
         }
+
 
 # ============================================
 # CÁLCULO DE INDICADORES (MEJORADO)
@@ -541,11 +438,10 @@ class ModeloPrediccion:
 class Backtester:
     """Ejecuta backtesting riguroso"""
     
-    def __init__(self, df, modelos, ticker, config):
+    def __init__(self, df, modelos, ticker):
         self.df = df
         self.modelos = modelos  # Dict de modelos por horizonte
         self.ticker = ticker
-        self.config = config    # Configuración específica
         self.operaciones = []
     
     def simular_operacion(self, idx, señal_long, prob, features_row):
@@ -556,20 +452,20 @@ class Backtester:
         # Determinar dirección
         direccion = 'LONG' if señal_long else 'SHORT'
         
-        # Calcular niveles CON multiplicadores específicos
+        # Calcular niveles
         if señal_long:
-            stop_loss = precio_entrada - (self.config['MULTIPLICADOR_SL'] * atr)
-            take_profit = precio_entrada + (self.config['MULTIPLICADOR_TP'] * atr)
+            stop_loss = precio_entrada - (TradingConfig.MULTIPLICADOR_SL * atr)
+            take_profit = precio_entrada + (TradingConfig.MULTIPLICADOR_TP * atr)
         else:
-            stop_loss = precio_entrada + (self.config['MULTIPLICADOR_SL'] * atr)
-            take_profit = precio_entrada - (self.config['MULTIPLICADOR_TP'] * atr)
+            stop_loss = precio_entrada + (TradingConfig.MULTIPLICADOR_SL * atr)
+            take_profit = precio_entrada - (TradingConfig.MULTIPLICADOR_TP * atr)
         
         riesgo = abs(precio_entrada - stop_loss)
         recompensa = abs(take_profit - precio_entrada)
         ratio_rr = recompensa / riesgo if riesgo > 0 else 0
         
-        # Filtro R:R específico
-        if ratio_rr < self.config['RATIO_MINIMO_RR']:
+        # Filtro R:R
+        if ratio_rr < TradingConfig.RATIO_MINIMO_RR:
             return None
         
         # Simular resultado (mirar hacia adelante máximo 24 horas)
@@ -632,7 +528,7 @@ class Backtester:
             'velas_hasta_cierre': velas_hasta_cierre
         }
     
-    def ejecutar(self, fecha_inicio):
+    def ejecutar(self, fecha_inicio, umbral_prob=0.65):
         """Ejecuta backtesting completo"""
         df_backtest = self.df[self.df.index >= fecha_inicio].copy()
         
@@ -663,12 +559,11 @@ class Backtester:
             # Decidir señal
             señal_long = prob_promedio > 0.5
             
-            # Filtros con umbrales específicos
-            if confianza_promedio < self.config['UMBRAL_CONFIANZA_MIN']:
+            # Filtros
+            if confianza_promedio < TradingConfig.UMBRAL_CONFIANZA_MIN:
                 continue
             
-            # Usar umbral de probabilidad específico
-            if max(probs_positivas) < self.config['UMBRAL_PROBABILIDAD_MIN'] and max([1-p for p in probs_positivas]) < self.config['UMBRAL_PROBABILIDAD_MIN']:
+            if max(probs_positivas) < umbral_prob and max([1-p for p in probs_positivas]) < umbral_prob:
                 continue
             
             # Simular operación
@@ -734,17 +629,14 @@ class SistemaTradingTicker:
     def __init__(self, ticker):
         self.ticker = ticker
         self.modelos = {}
-        # Obtener configuración específica para este ticker
-        self.config = TradingConfig.get_config(ticker)
-        # Usar fechas según configuración específica
-        self.fechas = TradingConfig.get_fechas(self.config)
+        self.fechas = TradingConfig.get_fechas()
         self.df_historico = None
         self.metricas_backtest = None
     
     def descargar_datos(self):
         """Descarga datos históricos"""
         print(f"\n{'='*80}")
-        print(f"📥 DESCARGANDO {self.ticker} ({self.config['CLASE']})")
+        print(f"📥 DESCARGANDO {self.ticker}")
         print(f"{'='*80}")
         
         try:
@@ -752,7 +644,7 @@ class SistemaTradingTicker:
                 self.ticker,
                 start=self.fechas['inicio_entrenamiento'],
                 end=self.fechas['actual'],
-                interval=self.config['INTERVALO'],
+                interval=TradingConfig.INTERVALO,
                 progress=False
             )
             
@@ -770,7 +662,6 @@ class SistemaTradingTicker:
             self.df_historico = df
             print(f"  ✅ Descargado: {len(df)} velas")
             print(f"  📅 Rango: {df.index[0]} a {df.index[-1]}")
-            print(f"  ⚙️  Config: {self.config['INTERVALO']}, Horizontes: {self.config['HORIZONTES']}")
             
             return True
             
@@ -793,8 +684,7 @@ class SistemaTradingTicker:
         
         modelos_entrenados = 0
         
-        # Usar horizontes específicos de la configuración
-        for horizonte in self.config['HORIZONTES']:
+        for horizonte in TradingConfig.HORIZONTES:
             print(f"\n  🔄 Horizonte {horizonte}h...")
             
             # Preparar dataset
@@ -807,7 +697,7 @@ class SistemaTradingTicker:
                 self.modelos[horizonte] = modelo
                 modelos_entrenados += 1
         
-        print(f"\n  ✅ Modelos entrenados: {modelos_entrenados}/{len(self.config['HORIZONTES'])}")
+        print(f"\n  ✅ Modelos entrenados: {modelos_entrenados}/{len(TradingConfig.HORIZONTES)}")
         
         return modelos_entrenados > 0
     
@@ -823,11 +713,11 @@ class SistemaTradingTicker:
         # Preparar datos completos (incluye período de backtest)
         df_completo, _ = EtiquetadoDatos.preparar_dataset_ml(
             self.df_historico, 
-            self.config['HORIZONTES'][0]
+            TradingConfig.HORIZONTES[0]
         )
         
-        # Ejecutar backtest CON configuración específica
-        backtester = Backtester(df_completo, self.modelos, self.ticker, self.config)
+        # Ejecutar backtest
+        backtester = Backtester(df_completo, self.modelos, self.ticker)
         resultado = backtester.ejecutar(self.fechas['inicio_backtest'])
         
         if resultado is None:
@@ -892,7 +782,7 @@ class SistemaTradingTicker:
                 self.ticker,
                 start=self.fechas['actual'] - timedelta(days=7),
                 end=self.fechas['actual'],
-                interval=self.config['INTERVALO'],
+                interval=TradingConfig.INTERVALO,
                 progress=False
             )
             
@@ -908,7 +798,7 @@ class SistemaTradingTicker:
             # Calcular features
             df_reciente = IndicadoresTecnicos.calcular_features(df_reciente)
 
-            # === MEAN REVERSION FILTER con umbral específico ===
+            # === MEAN REVERSION FILTER ===
             df_reciente["ret_log"] = np.log(df_reciente["Close"] / df_reciente["Close"].shift(1))
 
             window = 72  # 48h
@@ -918,12 +808,9 @@ class SistemaTradingTicker:
 
             z_actual = df_reciente["z_mr"].iloc[-1]
             evento = None
-            
-            # Usar umbral específico de la configuración
-            umbral_mr = self.config['UMBRAL_MR']
-            if z_actual > umbral_mr:
+            if z_actual > 2.2:
                 evento = "SHORT"
-            elif z_actual < -umbral_mr:
+            elif z_actual < -2.2:
                 evento = "LONG"
 
             # Obtener predicciones
@@ -946,20 +833,19 @@ class SistemaTradingTicker:
             # Determinar señal
             señal = 'LONG' if prob_promedio > 0.5 else 'SHORT'
             
-            # Niveles de riesgo CON multiplicadores específicos
+            # Niveles de riesgo
             precio = ultima_vela['Close']
             atr = ultima_vela['ATR']
             
             if señal == 'LONG':
-                sl = precio - (self.config['MULTIPLICADOR_SL'] * atr)
-                tp = precio + (self.config['MULTIPLICADOR_TP'] * atr)
+                sl = precio - (TradingConfig.MULTIPLICADOR_SL * atr)
+                tp = precio + (TradingConfig.MULTIPLICADOR_TP * atr)
             else:
-                sl = precio + (self.config['MULTIPLICADOR_SL'] * atr)
-                tp = precio - (self.config['MULTIPLICADOR_TP'] * atr)
+                sl = precio + (TradingConfig.MULTIPLICADOR_SL * atr)
+                tp = precio - (TradingConfig.MULTIPLICADOR_TP * atr)
             
             return {
                 'ticker': self.ticker,
-                'clase': self.config['CLASE'],
                 'fecha': datetime.now(TradingConfig.TIMEZONE),
                 'precio': precio,
                 'señal': señal,
@@ -984,8 +870,7 @@ class SistemaTradingTicker:
         if not self.modelos:
             return False
         
-        # Directorio por clase/ticker
-        path_ticker = TradingConfig.MODELOS_DIR / self.config['CLASE'] / self.ticker
+        path_ticker = TradingConfig.MODELOS_DIR / self.ticker
         path_ticker.mkdir(parents=True, exist_ok=True)
         
         for horizonte, modelo in self.modelos.items():
@@ -995,27 +880,31 @@ class SistemaTradingTicker:
         print(f"  💾 Modelos guardados en {path_ticker}")
         return True
 
+
 # ============================================
 # FUNCIÓN PRINCIPAL
 # ============================================
 
 def main():
-    enviar_telegram("🧪 BOT ARRANCÓ EN GITHUB ACTIONS - MULTI-ACTIVO")
+    enviar_telegram("🧪 BOT ARRANCÓ EN GITHUB ACTIONS")
     print("=" * 80)
 
-    print("🚀 SISTEMA DE TRADING MULTI-ACTIVO")
+    print("🚀 SISTEMA DE TRADING MEJORADO")
     print("=" * 80)
+    
+    fechas = TradingConfig.get_fechas()
+    print(f"\n📅 Configuración temporal:")
+    print(f"  Actual: {fechas['actual'].date()}")
+    print(f"  Entrenamiento desde: {fechas['inicio_entrenamiento'].date()}")
+    print(f"  Backtest desde: {fechas['inicio_backtest'].date()}")
+    print(f"  Intervalo: {TradingConfig.INTERVALO}")
+    print(f"  Horizontes: {TradingConfig.HORIZONTES} horas")
     
     resultados_globales = {}
     
     # Procesar cada ticker
     for ticker in TradingConfig.ACTIVOS:
         sistema = SistemaTradingTicker(ticker)
-        config = sistema.config
-        
-        print(f"\n📊 Procesando {ticker} ({config['CLASE']})")
-        print(f"   Intervalo: {config['INTERVALO']}, Horizontes: {config['HORIZONTES']}")
-        print(f"   SL: {config['MULTIPLICADOR_SL']}xATR, TP: {config['MULTIPLICADOR_TP']}xATR, MR: {config['UMBRAL_MR']}")
         
         # 1. Descargar datos
         if not sistema.descargar_datos():
@@ -1043,33 +932,34 @@ def main():
         # 5. Análisis tiempo real (solo si es viable)
         señal_actual = None
         if viable:
-            señal_actual = sistema.analizar_tiempo_real()
+           señal_actual = sistema.analizar_tiempo_real()
 
-            if (señal_actual and
-                señal_actual['confianza'] >= config['UMBRAL_CONFIANZA_MIN'] and
-                señal_actual['evento_mr'] is not None and
-                señal_actual['evento_mr'] == señal_actual['señal']):
+           if (señal_actual and
+               señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN and
+               señal_actual['evento_mr'] is not None and
+               señal_actual['evento_mr'] == señal_actual['señal']):
 
-                print(f"\n  🚨 SEÑAL DETECTADA:")
-                print(f"    Dirección: {señal_actual['señal']}")
-                print(f"    Probabilidad: {señal_actual['probabilidad']:.2%}")
-                print(f"    Confianza: {señal_actual['confianza']:.2%}")
-                print(f"    Precio: ${señal_actual['precio']:,.2f}")
-                print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
-                print(f"    TP: ${señal_actual['take_profit']:,.2f}")
-                print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
 
-                # 🔁 Control de repetición
-                ultima = cargar_ultima_senal()
-                if ultima and ultima["ticker"] == ticker and ultima["señal"] == señal_actual["señal"]:
-                    print("🔁 Señal repetida. No se envía.")
-                else:
-                    fecha = señal_actual['fecha'].strftime("%Y-%m-%d %H:%M")
+               print(f"\n  🚨 SEÑAL DETECTADA:")
+               print(f"    Dirección: {señal_actual['señal']}")
+               print(f"    Probabilidad: {señal_actual['probabilidad']:.2%}")
+               print(f"    Confianza: {señal_actual['confianza']:.2%}")
+               print(f"    Precio: ${señal_actual['precio']:,.2f}")
+               print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
+               print(f"    TP: ${señal_actual['take_profit']:,.2f}")
+               print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
 
-                    enviar_telegram(
-                       f"📊 SEÑAL {ticker} ({señal_actual['clase']})\n"
+               # 🔁 Control de repetición
+               ultima = cargar_ultima_senal()
+               if ultima and ultima["ticker"] == ticker and ultima["señal"] == señal_actual["señal"]:
+                   print("🔁 Señal repetida. No se envía.")
+               else:
+                   fecha = señal_actual['fecha'].strftime("%Y-%m-%d %H:%M")
+
+                   enviar_telegram(
+                       f"📊 SEÑAL {ticker}\n"
                        f"🕒 Fecha: {fecha}\n"
-                       f"⏱ TF: {config['INTERVALO']}\n"
+                       f"⏱ TF: {TradingConfig.INTERVALO}\n"
                        f"📈 Tendencia: {señal_actual['tendencia']}\n"
                        f"📊 RSI: {señal_actual['rsi']:.1f}\n\n"
                        f"Dirección: {señal_actual['señal']}\n"
@@ -1080,13 +970,14 @@ def main():
                        f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
                        f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}"
                        f"\n📐 Z-Score MR: {señal_actual['z_mr']:.2f}"
-                    )
 
-                    guardar_ultima_senal({
-                        "ticker": ticker,
-                        "señal": señal_actual["señal"],
-                        "fecha": str(señal_actual["fecha"])
-                    })
+                   )
+
+                   guardar_ultima_senal({
+                       "ticker": ticker,
+                       "señal": señal_actual["señal"],
+                       "fecha": str(señal_actual["fecha"])
+                   })
 
         # 6. Guardar modelos
         if viable:
