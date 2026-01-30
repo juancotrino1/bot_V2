@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
+import os
+import requests
 import warnings
 from sklearn.preprocessing import RobustScaler
 from sklearn.ensemble import RandomForestClassifier
@@ -927,6 +929,28 @@ def main():
                   f"PF {m['profit_factor']:.2f}")
     
     return resultados_globales
+
+
+    def enviar_telegram(mensaje):
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    requests.post(url, data={"chat_id": chat_id, "text": mensaje})
+
+
+
+    enviar_telegram(
+    f"""
+📊 SEÑAL {ticker}
+Dirección: {signal}
+Confianza: {confidence:.2f}
+Entrada: {price}
+SL: {sl}
+TP: {tp}
+"""
+)
 
 
 if __name__ == "__main__":
