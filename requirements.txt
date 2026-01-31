@@ -3,17 +3,20 @@
 # ============================================
 
 
-# === MACHINE LEARNING ===
+=== DATOS Y PROCESAMIENTO ===
+yfinance>=0.2.0
 numpy>=1.24.0
 pandas>=2.0.0
+pytz>=2023.3
+
+=== MACHINE LEARNING CORE ===
 scikit-learn>=1.3.0
 joblib>=1.3.0
-xgboost>=2.0.0          # ¡NUEVO! Para el modelo XGBoost
 
-# === UTILIDADES ===
-requests>=2.31.0               # Para Telegram
-pytz>=2023.3                   # Timezones
-yfinance>=0.2.0                # Para descargar datos de Yahoo Finance
+=== ALGORITMOS AVANZADOS DE ML ===
+xgboost>=2.0.0
+lightgbm>=4.0.0
+optuna>=3.3.0
 
 # === NOTAS DE INSTALACIÓN ===
 # 
