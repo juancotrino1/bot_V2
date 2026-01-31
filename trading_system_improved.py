@@ -7,732 +7,1027 @@ import os
 import requests
 import warnings
 from sklearn.preprocessing import RobustScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, classification_report
 import joblib
 from pathlib import Path
 import json
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
+
+def cargar_ultima_senal():
+    if os.path.exists("ultima_senal.json"):
+        with open("ultima_senal.json") as f:
+            return json.load(f)
+    return None
+
+def guardar_ultima_senal(senal):
+    with open("ultima_senal.json", "w") as f:
+        json.dump(senal, f)
+
+def enviar_telegram(mensaje):
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    print("DEBUG token:", "OK" if token else "NONE")
+    print("DEBUG chat_id:", chat_id)
+
+    if not token or not chat_id:
+        print("⚠️ Telegram no configurado")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    r = requests.post(url, data={"chat_id": chat_id, "text": mensaje})
+
+    print("📨 Telegram status:", r.status_code)
+    print("📨 Telegram response:", r.text)
+
+
+warnings.filterwarnings('ignore')
 
 # ============================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN MEJORADA
 # ============================================
 
 class TradingConfig:
-    TIMEZONE = pytz.timezone('America/Bogota')
-    INTERVALO = "1h"
-    DIAS_ENTRENAMIENTO = 180
-    DIAS_VALIDACION = 60
-    DIAS_BACKTEST = 60
+    """Configuración centralizada del sistema"""
     
-    ACTIVOS = ["BTC-USD"]
-    HORIZONTES = [4, 8, 12, 24]
+    # Timezone
+    TIMEZONE = pytz.timezone('America/Bogota')
+    
+    # Períodos de tiempo (CORREGIDO)
+    INTERVALO = "1h"
+    DIAS_ENTRENAMIENTO = 365  # 1 año de datos históricos
+    DIAS_VALIDACION = 90      # 3 meses para validación
+    DIAS_BACKTEST = 30        # 1 mes para backtesting final
+    
+    # Activos
+    ACTIVOS = [
+        "BTC-USD","ETH-USD","SOL-USD","BNB-USD","DOGE-USD","ADA-USD","LINK-USD","SUI20947-USD","AAVE-USD","NEAR-USD"
+    ]
+    
+    # Parámetros técnicos
+    VENTANA_VOLATILIDAD = 24  # 24 horas
+    VENTANA_TENDENCIA = 50
+    VENTANA_RAPIDA = 12
+    ATR_PERIODO = 14
+    RSI_PERIODO = 14
+    
+    # Horizontes de predicción (CORREGIDO - más cortos)
+    HORIZONTES = [4, 8, 12, 24, 48]  # En horas
     
     # Gestión de riesgo
-    SL_MULTIPLIER = 2.0
-    TP_MULTIPLIER = 3.0
-    RATIO_RR_MINIMO = 1.5
+    MULTIPLICADOR_SL = 2.0
+    MULTIPLICADOR_TP = 3.0
+    RATIO_MINIMO_RR = 1.5
+    MAX_RIESGO_POR_OPERACION = 0.02  # 2% del capital
     
-    # Umbrales
-    UMBRAL_PROBABILIDAD = 0.55
-    UMBRAL_CONFIANZA = 0.60
+    # Validación
+    N_FOLDS_WF = 3
+    MIN_MUESTRAS_ENTRENAMIENTO = 500
+    MIN_MUESTRAS_CLASE = 20
     
-    # Modelos
-    MODELOS = {
-        'XGBoost': XGBClassifier(random_state=42, n_jobs=-1, verbosity=0),
-        'LightGBM': LGBMClassifier(random_state=42, n_jobs=-1, verbose=-1),
-        'RandomForest': RandomForestClassifier(random_state=42, n_jobs=-1),
-    }
+    # Umbrales de trading
+    UMBRAL_PROBABILIDAD_MIN = 0.65
+    UMBRAL_CONFIANZA_MIN = 0.60
+    
+    # Persistencia
+    MODELOS_DIR = Path("modelos_trading")
     
     @classmethod
     def get_fechas(cls):
+        """Calcula fechas del sistema"""
         now = datetime.now(cls.TIMEZONE)
         return {
             'actual': now,
-            'inicio_backtest': now - timedelta(days=cls.DIAS_BACKTEST),
+            'inicio_entrenamiento': now - timedelta(days=cls.DIAS_ENTRENAMIENTO + cls.DIAS_VALIDACION + cls.DIAS_BACKTEST),
             'inicio_validacion': now - timedelta(days=cls.DIAS_VALIDACION + cls.DIAS_BACKTEST),
-            'inicio_entrenamiento': now - timedelta(days=cls.DIAS_ENTRENAMIENTO + cls.DIAS_VALIDACION + cls.DIAS_BACKTEST)
+            'inicio_backtest': now - timedelta(days=cls.DIAS_BACKTEST)
         }
 
+
 # ============================================
-# FEATURE ENGINEERING SIN TA-Lib
+# CÁLCULO DE INDICADORES (MEJORADO)
 # ============================================
 
-class FeatureEngineer:
-    """Calcula indicadores sin TA-Lib"""
+class IndicadoresTecnicos:
+    """Calcula indicadores técnicos sin look-ahead bias"""
     
     @staticmethod
-    def calcular_rsi(close, periodo=14):
-        """Calcula RSI sin TA-Lib"""
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=periodo).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=periodo).mean()
+    def calcular_rsi(precios, periodo=14):
+        """RSI robusto"""
+        delta = precios.diff()
+        ganancia = delta.where(delta > 0, 0).rolling(window=periodo, min_periods=periodo//2).mean()
+        perdida = (-delta.where(delta < 0, 0)).rolling(window=periodo, min_periods=periodo//2).mean()
         
-        rs = gain / loss
+        # Evitar división por cero
+        perdida = perdida.replace(0, 1e-10)
+        rs = ganancia / perdida
         rsi = 100 - (100 / (1 + rs))
         return rsi.fillna(50)
     
     @staticmethod
-    def calcular_atr(high, low, close, periodo=14):
-        """Calcula ATR sin TA-Lib"""
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(window=periodo).mean()
+    def calcular_atr(df, periodo=14):
+        """Average True Range"""
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        close_prev = close.shift(1)
+        
+        tr = pd.concat([
+            high - low,
+            (high - close_prev).abs(),
+            (low - close_prev).abs()
+        ], axis=1).max(axis=1)
+        
+        atr = tr.rolling(window=periodo, min_periods=periodo//2).mean()
         return atr.fillna(method='bfill')
     
     @staticmethod
-    def calcular_macd(close, fast=12, slow=26, signal=9):
-        """Calcula MACD sin TA-Lib"""
-        exp1 = close.ewm(span=fast, adjust=False).mean()
-        exp2 = close.ewm(span=slow, adjust=False).mean()
-        macd = exp1 - exp2
-        signal_line = macd.ewm(span=signal, adjust=False).mean()
-        histogram = macd - signal_line
-        return macd, signal_line, histogram
-    
-    @staticmethod
-    def calcular_bollinger_bands(close, periodo=20, std_dev=2):
-        """Calcula Bollinger Bands sin TA-Lib"""
-        sma = close.rolling(window=periodo).mean()
-        std = close.rolling(window=periodo).std()
-        upper = sma + (std * std_dev)
-        lower = sma - (std * std_dev)
-        return upper, sma, lower
-    
-    @staticmethod
-    def calcular_stochastic(high, low, close, periodo=14, smooth_k=3, smooth_d=3):
-        """Calcula Estocástico sin TA-Lib"""
-        low_min = low.rolling(window=periodo).min()
-        high_max = high.rolling(window=periodo).max()
+    def calcular_bollinger_bands(precios, ventana=20, num_std=2):
+        """Bandas de Bollinger"""
+        sma = precios.rolling(window=ventana, min_periods=ventana//2).mean()
+        std = precios.rolling(window=ventana, min_periods=ventana//2).std()
         
-        k = 100 * ((close - low_min) / (high_max - low_min))
-        k_smooth = k.rolling(window=smooth_k).mean()
-        d = k_smooth.rolling(window=smooth_d).mean()
+        upper = sma + (std * num_std)
+        lower = sma - (std * num_std)
         
-        return k_smooth, d
-    
-    @staticmethod
-    def calcular_obv(close, volume):
-        """Calcula OBV sin TA-Lib"""
-        obv = pd.Series(0, index=close.index)
-        obv.iloc[0] = volume.iloc[0]
+        # Posición relativa en las bandas (0 = banda inferior, 1 = banda superior)
+        bb_position = (precios - lower) / (upper - lower)
+        bb_position = bb_position.clip(0, 1).fillna(0.5)
         
-        for i in range(1, len(close)):
-            if close.iloc[i] > close.iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
-            elif close.iloc[i] < close.iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
-            else:
-                obv.iloc[i] = obv.iloc[i-1]
-        
-        return obv
+        return upper, lower, bb_position
     
     @staticmethod
     def calcular_features(df):
-        """Calcula todas las features sin TA-Lib"""
+        """Calcula todas las features para el modelo"""
         df = df.copy()
+        
+        # Asegurar columnas simples
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         
         close = df['Close']
         high = df['High']
         low = df['Low']
-        volume = df['Volume']
-        open_price = df['Open']
+        volume = df.get('Volume', pd.Series(1, index=df.index))
         
         # 1. Retornos
         df['retorno_1h'] = close.pct_change(1)
         df['retorno_4h'] = close.pct_change(4)
-        df['retorno_12h'] = close.pct_change(12)
         df['retorno_24h'] = close.pct_change(24)
         
         # 2. Volatilidad
-        df['volatilidad_24h'] = df['retorno_1h'].rolling(24).std()
+        df['volatilidad_24h'] = df['retorno_1h'].rolling(24, min_periods=12).std()
+        df['volatilidad_normalizada'] = df['volatilidad_24h'] / df['volatilidad_24h'].rolling(100, min_periods=50).mean()
         
-        # 3. RSI
-        df['RSI'] = FeatureEngineer.calcular_rsi(close, 14)
-        
-        # 4. ATR
-        df['ATR'] = FeatureEngineer.calcular_atr(high, low, close, 14)
+        # 3. Indicadores técnicos
+        df['RSI'] = IndicadoresTecnicos.calcular_rsi(close, TradingConfig.RSI_PERIODO)
+        df['ATR'] = IndicadoresTecnicos.calcular_atr(df, TradingConfig.ATR_PERIODO)
         df['ATR_pct'] = df['ATR'] / close
         
-        # 5. MACD
-        macd, signal, hist = FeatureEngineer.calcular_macd(close)
-        df['MACD'] = macd
-        df['MACD_SIGNAL'] = signal
-        df['MACD_HIST'] = hist
+        # 4. Medias móviles y tendencia
+        df['SMA_12'] = close.rolling(12, min_periods=6).mean()
+        df['SMA_50'] = close.rolling(50, min_periods=25).mean()
+        df['EMA_12'] = close.ewm(span=12, min_periods=6).mean()
         
-        # 6. Bollinger Bands
-        bb_upper, bb_middle, bb_lower = FeatureEngineer.calcular_bollinger_bands(close)
-        df['BB_UPPER'] = bb_upper
-        df['BB_MIDDLE'] = bb_middle
-        df['BB_LOWER'] = bb_lower
-        df['BB_PERCENT'] = (close - bb_lower) / (bb_upper - bb_lower)
-        df['BB_WIDTH'] = (bb_upper - bb_lower) / bb_middle
+        df['dist_sma_12'] = (close - df['SMA_12']) / df['SMA_12']
+        df['dist_sma_50'] = (close - df['SMA_50']) / df['SMA_50']
+        df['tendencia'] = (df['SMA_12'] > df['SMA_50']).astype(int)
         
-        # 7. Estocástico
-        stoch_k, stoch_d = FeatureEngineer.calcular_stochastic(high, low, close)
-        df['STOCH_K'] = stoch_k
-        df['STOCH_D'] = stoch_d
+        # 5. Bollinger Bands
+        bb_upper, bb_lower, bb_pos = IndicadoresTecnicos.calcular_bollinger_bands(close)
+        df['BB_position'] = bb_pos
+        df['BB_width'] = (bb_upper - bb_lower) / close
         
-        # 8. OBV
-        df['OBV'] = FeatureEngineer.calcular_obv(close, volume)
-        df['OBV_MA'] = df['OBV'].rolling(20).mean()
-        
-        # 9. Medias móviles
-        df['SMA_20'] = close.rolling(20).mean()
-        df['SMA_50'] = close.rolling(50).mean()
-        df['EMA_12'] = close.ewm(span=12, adjust=False).mean()
-        df['EMA_26'] = close.ewm(span=26, adjust=False).mean()
-        
-        df['SMA_20_RATIO'] = close / df['SMA_20']
-        df['SMA_50_RATIO'] = close / df['SMA_50']
-        
-        # 10. Tendencias
-        df['tendencia_sma'] = (df['SMA_20'] > df['SMA_50']).astype(int)
-        df['tendencia_ema'] = (df['EMA_12'] > df['EMA_26']).astype(int)
-        
-        # 11. Volumen
-        df['volumen_relativo'] = volume / volume.rolling(20).mean()
-        df['volumen_sma'] = volume.rolling(20).mean()
-        
-        # 12. Rango de precio
-        df['rango_hl'] = (high - low) / close
-        df['rango_hl_pct'] = (high - low) / low
-        df['body_size'] = abs(close - open_price) / close
-        
-        # 13. Momento
+        # 6. Momentum
         df['momentum_4h'] = close / close.shift(4) - 1
-        df['momentum_12h'] = close / close.shift(12) - 1
+        df['momentum_aceleracion'] = df['retorno_1h'].diff()
         
-        # 14. Características de tiempo
+        # 7. Volumen
+        df['volumen_relativo'] = volume / volume.rolling(24, min_periods=12).mean()
+        
+        # 8. Rango de precio
+        df['rango_hl'] = (high - low) / close
+        df['body_size'] = abs(close - df['Open']) / close
+        
+        # 9. Features de contexto
         df['hora_dia'] = df.index.hour
-        df['dia_semana'] = df.index.dayofweek
-        df['es_finde'] = df['dia_semana'].isin([5, 6]).astype(int)
+        df['es_apertura_ny'] = ((df['hora_dia'] >= 13) & (df['hora_dia'] <= 15)).astype(int)
         
-        # 15. Soporte y resistencia
-        df['resistance_20'] = high.rolling(20).max()
-        df['support_20'] = low.rolling(20).min()
-        df['dist_to_res'] = (df['resistance_20'] - close) / close
-        df['dist_to_sup'] = (close - df['support_20']) / close
-        
-        # 16. Z-score de precio
-        df['z_score_24h'] = (close - close.rolling(24).mean()) / close.rolling(24).std()
-        
-        # Llenar NaN
-        df = df.fillna(method='bfill').fillna(method='ffill')
+        # 10. Z-scores para detección de anomalías
+        for col in ['retorno_1h', 'volatilidad_24h', 'volumen_relativo']:
+            if col in df.columns:
+                media = df[col].rolling(100, min_periods=50).mean()
+                std = df[col].rolling(100, min_periods=50).std()
+                df[f'{col}_zscore'] = (df[col] - media) / (std + 1e-10)
         
         return df
 
+
 # ============================================
-# SISTEMA DE ENTRENAMIENTO
+# ETIQUETADO DE DATOS (CORREGIDO)
 # ============================================
 
-class TradingSystem:
+class EtiquetadoDatos:
+    """Crea etiquetas para entrenamiento"""
+    
+    @staticmethod
+    def calcular_retorno_futuro(df, horizonte):
+        """Calcula retorno futuro real"""
+        return df['Close'].shift(-horizonte) / df['Close'] - 1
+    
+    @staticmethod
+    def crear_etiquetas_direccion(df, horizonte, umbral_movimiento=0.005):
+        """
+        Etiqueta binaria: 1 si hay movimiento significativo alcista, 0 si bajista
+        Se ignoran movimientos pequeños (< umbral)
+        """
+        retorno_futuro = EtiquetadoDatos.calcular_retorno_futuro(df, horizonte)
+        
+        # Clasificación triple: LONG (1), SHORT (0), NEUTRAL (NaN)
+        etiqueta = pd.Series(np.nan, index=df.index)
+        etiqueta[retorno_futuro > umbral_movimiento] = 1
+        etiqueta[retorno_futuro < -umbral_movimiento] = 0
+        
+        return etiqueta, retorno_futuro
+    
+    @staticmethod
+    def preparar_dataset_ml(df, horizonte):
+        """Prepara dataset completo para ML"""
+        # Calcular features
+        df = IndicadoresTecnicos.calcular_features(df)
+        
+        # Crear etiquetas
+        etiqueta, retorno_futuro = EtiquetadoDatos.crear_etiquetas_direccion(df, horizonte)
+        df[f'etiqueta_{horizonte}h'] = etiqueta
+        df[f'retorno_futuro_{horizonte}h'] = retorno_futuro
+        
+        # Features para el modelo (sin look-ahead bias)
+        features = [
+            'RSI', 'ATR_pct', 'volatilidad_24h', 'volatilidad_normalizada',
+            'dist_sma_12', 'dist_sma_50', 'tendencia',
+            'BB_position', 'BB_width',
+            'momentum_4h', 'momentum_aceleracion',
+            'volumen_relativo', 'rango_hl', 'body_size',
+            'retorno_1h', 'retorno_4h', 'retorno_24h',
+            'retorno_1h_zscore', 'volatilidad_24h_zscore', 'volumen_relativo_zscore',
+            'es_apertura_ny'
+        ]
+        
+        # Filtrar solo features disponibles
+        features_disponibles = [f for f in features if f in df.columns]
+        
+        return df, features_disponibles
+
+
+# ============================================
+# MODELO DE MACHINE LEARNING (MEJORADO)
+# ============================================
+
+class ModeloPrediccion:
+    """Modelo de ML para predicción de dirección"""
+    
+    def __init__(self, horizonte, ticker):
+        self.horizonte = horizonte
+        self.ticker = ticker
+        self.modelo = None
+        self.scaler = None
+        self.features = None
+        self.metricas_validacion = {}
+    
+    def entrenar_walk_forward(self, df, features, etiqueta_col):
+        """Entrenamiento con validación walk-forward"""
+        
+        # Filtrar datos válidos
+        df_valido = df.dropna(subset=[etiqueta_col] + features).copy()
+        
+        if len(df_valido) < TradingConfig.MIN_MUESTRAS_ENTRENAMIENTO:
+            print(f"    ⚠️ Datos insuficientes: {len(df_valido)} < {TradingConfig.MIN_MUESTRAS_ENTRENAMIENTO}")
+            return False
+        
+        X = df_valido[features]
+        y = df_valido[etiqueta_col]
+        
+        # Verificar balance de clases
+        if y.sum() < TradingConfig.MIN_MUESTRAS_CLASE or (len(y) - y.sum()) < TradingConfig.MIN_MUESTRAS_CLASE:
+            print(f"    ⚠️ Clases desbalanceadas: Positivos={y.sum()}, Negativos={len(y)-y.sum()}")
+            return False
+        
+        # Walk-forward validation
+        tscv = TimeSeriesSplit(n_splits=TradingConfig.N_FOLDS_WF)
+        scores = []
+        
+        for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
+            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            
+            # Escalar
+            scaler = RobustScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
+            
+            # Entrenar modelo
+            modelo = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=10,
+                min_samples_split=20,
+                min_samples_leaf=10,
+                class_weight='balanced',
+                random_state=42,
+                n_jobs=-1
+            )
+            
+            modelo.fit(X_train_scaled, y_train)
+            
+            # Evaluar
+            y_pred = modelo.predict(X_val_scaled)
+            acc = accuracy_score(y_val, y_pred)
+            prec = precision_score(y_val, y_pred, zero_division=0)
+            rec = recall_score(y_val, y_pred, zero_division=0)
+            
+            scores.append({'accuracy': acc, 'precision': prec, 'recall': rec})
+        
+        # Métricas promedio
+        self.metricas_validacion = {
+            'accuracy': np.mean([s['accuracy'] for s in scores]),
+            'precision': np.mean([s['precision'] for s in scores]),
+            'recall': np.mean([s['recall'] for s in scores]),
+            'n_folds': len(scores)
+        }
+        
+        print(f"      ✅ Accuracy: {self.metricas_validacion['accuracy']:.2%}, "
+              f"Precision: {self.metricas_validacion['precision']:.2%}, "
+              f"Recall: {self.metricas_validacion['recall']:.2%}")
+        
+        # Entrenar modelo final con todos los datos
+        self.scaler = RobustScaler()
+        X_scaled = self.scaler.fit_transform(X)
+        
+        self.modelo = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        self.modelo.fit(X_scaled, y)
+        self.features = features
+        
+        return True
+    
+    def predecir(self, df_actual):
+        """Realiza predicción en datos nuevos"""
+        if self.modelo is None:
+            return None
+        
+        # Asegurar que tenemos todas las features
+        if not all(f in df_actual.columns for f in self.features):
+            return None
+        
+        X = df_actual[self.features].iloc[[-1]]  # Última fila
+        X_scaled = self.scaler.transform(X)
+        
+        prediccion_clase = self.modelo.predict(X_scaled)[0]
+        probabilidades = self.modelo.predict_proba(X_scaled)[0]
+        
+        return {
+            'prediccion': int(prediccion_clase),
+            'probabilidad_positiva': probabilidades[1],
+            'probabilidad_negativa': probabilidades[0],
+            'confianza': max(probabilidades)
+        }
+    
+    def guardar(self, path):
+        """Guarda el modelo"""
+        if self.modelo is None:
+            return False
+        
+        modelo_data = {
+            'modelo': self.modelo,
+            'scaler': self.scaler,
+            'features': self.features,
+            'metricas': self.metricas_validacion,
+            'horizonte': self.horizonte,
+            'ticker': self.ticker
+        }
+        
+        joblib.dump(modelo_data, path)
+        return True
+    
+    @classmethod
+    def cargar(cls, path):
+        """Carga un modelo guardado"""
+        modelo_data = joblib.load(path)
+        
+        instancia = cls(modelo_data['horizonte'], modelo_data['ticker'])
+        instancia.modelo = modelo_data['modelo']
+        instancia.scaler = modelo_data['scaler']
+        instancia.features = modelo_data['features']
+        instancia.metricas_validacion = modelo_data['metricas']
+        
+        return instancia
+
+
+# ============================================
+# BACKTESTING (MEJORADO)
+# ============================================
+
+class Backtester:
+    """Ejecuta backtesting riguroso"""
+    
+    def __init__(self, df, modelos, ticker):
+        self.df = df
+        self.modelos = modelos  # Dict de modelos por horizonte
+        self.ticker = ticker
+        self.operaciones = []
+    
+    def simular_operacion(self, idx, señal_long, prob, features_row):
+        """Simula una operación completa"""
+        precio_entrada = self.df.loc[idx, 'Close']
+        atr = self.df.loc[idx, 'ATR']
+        
+        # Determinar dirección
+        direccion = 'LONG' if señal_long else 'SHORT'
+        
+        # Calcular niveles
+        if señal_long:
+            stop_loss = precio_entrada - (TradingConfig.MULTIPLICADOR_SL * atr)
+            take_profit = precio_entrada + (TradingConfig.MULTIPLICADOR_TP * atr)
+        else:
+            stop_loss = precio_entrada + (TradingConfig.MULTIPLICADOR_SL * atr)
+            take_profit = precio_entrada - (TradingConfig.MULTIPLICADOR_TP * atr)
+        
+        riesgo = abs(precio_entrada - stop_loss)
+        recompensa = abs(take_profit - precio_entrada)
+        ratio_rr = recompensa / riesgo if riesgo > 0 else 0
+        
+        # Filtro R:R
+        if ratio_rr < TradingConfig.RATIO_MINIMO_RR:
+            return None
+        
+        # Simular resultado (mirar hacia adelante máximo 24 horas)
+        idx_pos = self.df.index.get_loc(idx)
+        max_ventana = min(24, len(self.df) - idx_pos - 1)
+        
+        if max_ventana < 4:
+            return None
+        
+        precios_futuros = self.df.iloc[idx_pos:idx_pos + max_ventana + 1]['Close'].values
+        
+        # Determinar resultado
+        resultado = 'TIEMPO'
+        velas_hasta_cierre = max_ventana
+        retorno = 0
+        
+        for i, precio in enumerate(precios_futuros[1:], 1):
+            if señal_long:
+                if precio >= take_profit:
+                    resultado = 'TP'
+                    velas_hasta_cierre = i
+                    retorno = recompensa / precio_entrada
+                    break
+                elif precio <= stop_loss:
+                    resultado = 'SL'
+                    velas_hasta_cierre = i
+                    retorno = -riesgo / precio_entrada
+                    break
+            else:  # SHORT
+                if precio <= take_profit:
+                    resultado = 'TP'
+                    velas_hasta_cierre = i
+                    retorno = recompensa / precio_entrada
+                    break
+                elif precio >= stop_loss:
+                    resultado = 'SL'
+                    velas_hasta_cierre = i
+                    retorno = -riesgo / precio_entrada
+                    break
+        
+        # Si llegamos hasta el final sin hit
+        if resultado == 'TIEMPO':
+            precio_cierre = precios_futuros[velas_hasta_cierre]
+            if señal_long:
+                retorno = (precio_cierre - precio_entrada) / precio_entrada
+            else:
+                retorno = (precio_entrada - precio_cierre) / precio_entrada
+        
+        return {
+            'fecha': idx,
+            'ticker': self.ticker,
+            'direccion': direccion,
+            'precio_entrada': precio_entrada,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'ratio_rr': ratio_rr,
+            'probabilidad': prob,
+            'resultado': resultado,
+            'retorno': retorno,
+            'velas_hasta_cierre': velas_hasta_cierre
+        }
+    
+    def ejecutar(self, fecha_inicio, umbral_prob=0.65):
+        """Ejecuta backtesting completo"""
+        df_backtest = self.df[self.df.index >= fecha_inicio].copy()
+        
+        if len(df_backtest) < 100:
+            print(f"  ⚠️ Datos insuficientes para backtesting: {len(df_backtest)} velas")
+            return None
+        
+        print(f"  📊 Backtesting: {df_backtest.index[0]} a {df_backtest.index[-1]} ({len(df_backtest)} velas)")
+        
+        # Iterar sobre cada vela
+        for idx in df_backtest.index[:-24]:  # Dejar margen para simulación
+            predicciones = {}
+            
+            # Obtener predicciones de todos los horizontes
+            for horizonte, modelo in self.modelos.items():
+                pred = modelo.predecir(df_backtest.loc[:idx])
+                if pred:
+                    predicciones[horizonte] = pred
+            
+            if not predicciones:
+                continue
+            
+            # Consenso de modelos
+            probs_positivas = [p['probabilidad_positiva'] for p in predicciones.values()]
+            prob_promedio = np.mean(probs_positivas)
+            confianza_promedio = np.mean([p['confianza'] for p in predicciones.values()])
+            
+            # Decidir señal
+            señal_long = prob_promedio > 0.5
+            
+            # Filtros
+            if confianza_promedio < TradingConfig.UMBRAL_CONFIANZA_MIN:
+                continue
+            
+            if max(probs_positivas) < umbral_prob and max([1-p for p in probs_positivas]) < umbral_prob:
+                continue
+            
+            # Simular operación
+            operacion = self.simular_operacion(
+                idx, 
+                señal_long, 
+                prob_promedio,
+                df_backtest.loc[idx]
+            )
+            
+            if operacion:
+                self.operaciones.append(operacion)
+        
+        if not self.operaciones:
+            print(f"  ⚠️ No se generaron operaciones en backtesting")
+            return None
+        
+        return self.calcular_metricas()
+    
+    def calcular_metricas(self):
+        """Calcula métricas de rendimiento"""
+        df_ops = pd.DataFrame(self.operaciones)
+        
+        n_ops = len(df_ops)
+        n_tp = (df_ops['resultado'] == 'TP').sum()
+        n_sl = (df_ops['resultado'] == 'SL').sum()
+        
+        retornos = df_ops['retorno']
+        operaciones_ganadoras = retornos > 0
+        
+        metricas = {
+            'n_operaciones': n_ops,
+            'tasa_exito': operaciones_ganadoras.sum() / n_ops,
+            'hit_tp_rate': n_tp / n_ops,
+            'hit_sl_rate': n_sl / n_ops,
+            'retorno_total': retornos.sum(),
+            'retorno_promedio': retornos.mean(),
+            'retorno_mediano': retornos.median(),
+            'mejor_operacion': retornos.max(),
+            'peor_operacion': retornos.min(),
+            'profit_factor': abs(retornos[retornos > 0].sum() / retornos[retornos < 0].sum()) if (retornos < 0).any() else np.inf,
+            'max_drawdown': self._calcular_max_drawdown(retornos),
+            'sharpe_ratio': retornos.mean() / retornos.std() if retornos.std() > 0 else 0,
+        }
+        
+        return metricas, df_ops
+    
+    def _calcular_max_drawdown(self, retornos):
+        """Calcula drawdown máximo"""
+        equity_curve = (1 + retornos).cumprod()
+        running_max = equity_curve.expanding().max()
+        drawdown = (equity_curve - running_max) / running_max
+        return drawdown.min()
+
+
+# ============================================
+# SISTEMA COMPLETO POR TICKER
+# ============================================
+
+class SistemaTradingTicker:
+    """Sistema completo de trading para un ticker"""
+    
     def __init__(self, ticker):
         self.ticker = ticker
-        self.config = TradingConfig()
-        self.fechas = self.config.get_fechas()
-        self.datos = None
         self.modelos = {}
-        self.resultados = {}
+        self.fechas = TradingConfig.get_fechas()
+        self.df_historico = None
+        self.metricas_backtest = None
     
     def descargar_datos(self):
         """Descarga datos históricos"""
+        print(f"\n{'='*80}")
+        print(f"📥 DESCARGANDO {self.ticker}")
+        print(f"{'='*80}")
+        
         try:
             df = yf.download(
                 self.ticker,
                 start=self.fechas['inicio_entrenamiento'],
                 end=self.fechas['actual'],
-                interval=self.config.INTERVALO,
+                interval=TradingConfig.INTERVALO,
                 progress=False
             )
             
             if df.empty:
+                print(f"  ❌ No hay datos disponibles")
                 return False
             
+            # Limpiar MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             
-            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-            self.datos = df
-            print(f"✅ Descargadas {len(df)} velas")
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            df = df.dropna()
+            
+            self.df_historico = df
+            print(f"  ✅ Descargado: {len(df)} velas")
+            print(f"  📅 Rango: {df.index[0]} a {df.index[-1]}")
+            
             return True
             
         except Exception as e:
-            print(f"❌ Error descargando datos: {e}")
+            print(f"  ❌ Error: {e}")
             return False
     
-    def preparar_features_y_etiquetas(self, df, horizonte):
-        """Prepara features y etiquetas para un horizonte específico"""
-        # Calcular features
-        df_features = FeatureEngineer.calcular_features(df)
-        
-        # Crear etiquetas (retorno futuro)
-        retorno_futuro = df_features['Close'].shift(-horizonte) / df_features['Close'] - 1
-        
-        # Umbral dinámico basado en volatilidad
-        umbral = df_features['volatilidad_24h'] * 1.5
-        
-        # Crear etiquetas binarias
-        etiqueta = pd.Series(0, index=df_features.index)  # Neutral por defecto
-        etiqueta[retorno_futuro > umbral] = 1  # Alcista
-        etiqueta[retorno_futuro < -umbral] = 0  # Bajista
-        
-        # Filtrar columnas para el modelo
-        exclude_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'resistance_20', 'support_20']
-        features = [col for col in df_features.columns if col not in exclude_cols]
-        
-        return df_features, etiqueta, features
-    
-    def entrenar_modelo_para_horizonte(self, horizonte):
-        """Entrena un modelo para un horizonte específico"""
-        # Dividir datos
-        fecha_corte = self.fechas['inicio_backtest']
-        df_train = self.datos[self.datos.index < fecha_corte].copy()
-        df_test = self.datos[self.datos.index >= fecha_corte].copy()
-        
-        # Preparar datos de entrenamiento
-        df_train_features, y_train, features = self.preparar_features_y_etiquetas(df_train, horizonte)
-        X_train = df_train_features[features]
-        
-        # Filtrar NaN
-        mask = y_train.notna()
-        X_train = X_train[mask]
-        y_train = y_train[mask]
-        
-        if len(X_train) < 100:
-            print(f"  ⚠️ Datos insuficientes para horizonte {horizonte}h: {len(X_train)}")
-            return None
-        
-        # Escalar
-        scaler = RobustScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        
-        # Entrenar múltiples modelos
-        mejores_resultados = {'modelo': None, 'accuracy': 0, 'nombre': ''}
-        
-        for nombre, modelo_base in self.config.MODELOS.items():
-            # Validación walk-forward
-            tscv = TimeSeriesSplit(n_splits=3)
-            accuracies = []
-            
-            for train_idx, val_idx in tscv.split(X_train_scaled):
-                X_t, X_v = X_train_scaled[train_idx], X_train_scaled[val_idx]
-                y_t, y_v = y_train.iloc[train_idx], y_train.iloc[val_idx]
-                
-                modelo = modelo_base.__class__(**modelo_base.get_params())
-                modelo.fit(X_t, y_t)
-                
-                y_pred = modelo.predict(X_v)
-                acc = accuracy_score(y_v, y_pred)
-                accuracies.append(acc)
-            
-            acc_promedio = np.mean(accuracies)
-            
-            if acc_promedio > mejores_resultados['accuracy']:
-                mejores_resultados = {
-                    'modelo': modelo_base,
-                    'accuracy': acc_promedio,
-                    'nombre': nombre
-                }
-        
-        if mejores_resultados['modelo'] is None:
-            return None
-        
-        # Entrenar modelo final
-        modelo_final = mejores_resultados['modelo'].__class__(**mejores_resultados['modelo'].get_params())
-        modelo_final.fit(X_train_scaled, y_train)
-        
-        print(f"  ✅ Horizonte {horizonte}h: {mejores_resultados['nombre']} (Accuracy: {mejores_resultados['accuracy']:.2%})")
-        
-        return {
-            'modelo': modelo_final,
-            'scaler': scaler,
-            'features': features,
-            'accuracy': mejores_resultados['accuracy'],
-            'nombre': mejores_resultados['nombre']
-        }
-    
-    def entrenar_todos_modelos(self):
+    def entrenar_modelos(self):
         """Entrena modelos para todos los horizontes"""
-        print("\n🎯 ENTRENANDO MODELOS")
-        print("=" * 60)
+        print(f"\n🎯 ENTRENANDO MODELOS - {self.ticker}")
+        print("-" * 80)
         
-        for horizonte in self.config.HORIZONTES:
-            print(f"\n🔮 Horizonte {horizonte}h")
-            modelo_data = self.entrenar_modelo_para_horizonte(horizonte)
-            if modelo_data:
-                self.modelos[horizonte] = modelo_data
+        if self.df_historico is None:
+            return False
+        
+        # Usar datos hasta inicio de backtest para entrenamiento
+        df_train = self.df_historico[self.df_historico.index < self.fechas['inicio_backtest']].copy()
+        
+        print(f"  📊 Datos entrenamiento: {len(df_train)} velas")
+        
+        modelos_entrenados = 0
+        
+        for horizonte in TradingConfig.HORIZONTES:
+            print(f"\n  🔄 Horizonte {horizonte}h...")
+            
+            # Preparar dataset
+            df_prep, features = EtiquetadoDatos.preparar_dataset_ml(df_train, horizonte)
+            etiqueta_col = f'etiqueta_{horizonte}h'
+            
+            # Entrenar modelo
+            modelo = ModeloPrediccion(horizonte, self.ticker)
+            if modelo.entrenar_walk_forward(df_prep, features, etiqueta_col):
+                self.modelos[horizonte] = modelo
+                modelos_entrenados += 1
+        
+        print(f"\n  ✅ Modelos entrenados: {modelos_entrenados}/{len(TradingConfig.HORIZONTES)}")
+        
+        return modelos_entrenados > 0
     
     def ejecutar_backtest(self):
         """Ejecuta backtesting"""
+        print(f"\n🔬 BACKTESTING - {self.ticker}")
+        print("-" * 80)
+        
         if not self.modelos:
-            print("❌ No hay modelos entrenados")
+            print("  ❌ No hay modelos entrenados")
             return False
         
-        print("\n🔬 EJECUTANDO BACKTEST")
-        print("=" * 60)
+        # Preparar datos completos (incluye período de backtest)
+        df_completo, _ = EtiquetadoDatos.preparar_dataset_ml(
+            self.df_historico, 
+            TradingConfig.HORIZONTES[0]
+        )
         
-        fecha_inicio = self.fechas['inicio_backtest']
-        df_backtest = self.datos[self.datos.index >= fecha_inicio].copy()
+        # Ejecutar backtest
+        backtester = Backtester(df_completo, self.modelos, self.ticker)
+        resultado = backtester.ejecutar(self.fechas['inicio_backtest'])
         
-        operaciones = []
+        if resultado is None:
+            return False
         
-        # Para cada punto en el backtest
-        for i in range(100, len(df_backtest) - 24):  # Dejar margen
-            idx = df_backtest.index[i]
-            
-            # Datos disponibles hasta este punto
-            df_historia = df_backtest.iloc[:i+1].copy()
-            df_features = FeatureEngineer.calcular_features(df_historia)
-            
-            # Obtener predicciones de todos los modelos
-            predicciones = []
-            confianzas = []
-            
-            for horizonte, modelo_data in self.modelos.items():
-                # Preparar datos para predicción
-                X_pred = df_features[modelo_data['features']].tail(1)
-                
-                if not X_pred.empty:
-                    X_scaled = modelo_data['scaler'].transform(X_pred)
-                    pred = modelo_data['modelo'].predict(X_scaled)[0]
-                    proba = modelo_data['modelo'].predict_proba(X_scaled)[0]
-                    
-                    predicciones.append(pred)
-                    confianzas.append(max(proba))
-            
-            if predicciones:
-                # Consenso: mayoría simple
-                señal = 1 if sum(predicciones) > len(predicciones) / 2 else 0
-                confianza_promedio = np.mean(confianzas)
-                
-                # Filtrar por confianza
-                if confianza_promedio > self.config.UMBRAL_CONFIANZA:
-                    # Simular operación
-                    operacion = self.simular_operacion(df_backtest, i, señal, confianza_promedio)
-                    if operacion:
-                        operaciones.append(operacion)
-        
-        if operaciones:
-            self.analizar_resultados(operaciones)
-            return True
-        
-        return False
-    
-    def simular_operacion(self, df, idx_pos, señal, confianza):
-        """Simula una operación de trading"""
-        entrada = df.iloc[idx_pos]
-        precio = entrada['Close']
-        atr = entrada.get('ATR', precio * 0.02) if 'ATR' in df.columns else precio * 0.02
-        
-        # Calcular SL y TP
-        if señal == 1:  # LONG
-            sl = precio * (1 - self.config.SL_MULTIPLIER * atr / precio)
-            tp = precio * (1 + self.config.TP_MULTIPLIER * atr / precio)
-        else:  # SHORT
-            sl = precio * (1 + self.config.SL_MULTIPLIER * atr / precio)
-            tp = precio * (1 - self.config.TP_MULTIPLIER * atr / precio)
-        
-        # Calcular ratio R:R
-        riesgo = abs(precio - sl)
-        recompensa = abs(tp - precio)
-        ratio_rr = recompensa / riesgo if riesgo > 0 else 0
-        
-        if ratio_rr < self.config.RATIO_RR_MINIMO:
-            return None
-        
-        # Simular resultado
-        resultado, retorno, velas = 'TIMEOUT', 0, 0
-        
-        for j in range(1, min(24, len(df) - idx_pos - 1)):
-            precio_actual = df.iloc[idx_pos + j]['Close']
-            
-            if señal == 1:  # LONG
-                if precio_actual >= tp:
-                    resultado = 'TP'
-                    retorno = (tp - precio) / precio
-                    velas = j
-                    break
-                elif precio_actual <= sl:
-                    resultado = 'SL'
-                    retorno = (sl - precio) / precio
-                    velas = j
-                    break
-            else:  # SHORT
-                if precio_actual <= tp:
-                    resultado = 'TP'
-                    retorno = (precio - tp) / precio
-                    velas = j
-                    break
-                elif precio_actual >= sl:
-                    resultado = 'SL'
-                    retorno = (precio - sl) / precio
-                    velas = j
-                    break
-        
-        if resultado == 'TIMEOUT':
-            precio_final = df.iloc[idx_pos + 23]['Close']
-            if señal == 1:
-                retorno = (precio_final - precio) / precio
-            else:
-                retorno = (precio - precio_final) / precio
-            velas = 23
-        
-        return {
-            'fecha': df.index[idx_pos],
-            'direccion': 'LONG' if señal == 1 else 'SHORT',
-            'precio': precio,
-            'sl': sl,
-            'tp': tp,
-            'ratio_rr': ratio_rr,
-            'confianza': confianza,
-            'resultado': resultado,
-            'retorno': retorno,
-            'velas': velas
-        }
-    
-    def analizar_resultados(self, operaciones):
-        """Analiza los resultados del backtest"""
-        df_ops = pd.DataFrame(operaciones)
-        
-        retornos = df_ops['retorno']
-        ganadoras = retornos > 0
-        
-        n_ops = len(df_ops)
-        win_rate = ganadoras.mean()
-        retorno_total = retornos.sum()
-        retorno_promedio = retornos.mean()
-        
-        # Profit Factor
-        ganancias = retornos[retornos > 0].sum()
-        perdidas = abs(retornos[retornos < 0].sum())
-        pf = ganancias / perdidas if perdidas > 0 else np.inf
-        
-        # Drawdown
-        equity_curve = (1 + retornos).cumprod()
-        running_max = equity_curve.expanding().max()
-        drawdown = (equity_curve - running_max) / running_max
-        max_dd = drawdown.min()
-        
-        # Sharpe Ratio
-        sharpe = retornos.mean() / retornos.std() if retornos.std() > 0 else 0
-        
-        self.resultados = {
-            'n_operaciones': n_ops,
-            'win_rate': win_rate,
-            'retorno_total': retorno_total,
-            'retorno_promedio': retorno_promedio,
-            'profit_factor': pf,
-            'max_drawdown': max_dd,
-            'sharpe_ratio': sharpe,
-            'ganancias': ganancias,
-            'perdidas': perdidas,
-            'mejor_operacion': retornos.max(),
-            'peor_operacion': retornos.min(),
-            'operaciones': df_ops
-        }
+        metricas, df_ops = resultado
+        self.metricas_backtest = metricas
         
         # Mostrar resultados
-        print(f"\n📊 RESULTADOS DEL BACKTEST")
-        print(f"  Operaciones: {n_ops}")
-        print(f"  Win Rate: {win_rate:.2%}")
-        print(f"  Retorno Total: {retorno_total:.2%}")
-        print(f"  Retorno Promedio: {retorno_promedio:.2%}")
-        print(f"  Profit Factor: {pf:.2f}")
-        print(f"  Max Drawdown: {max_dd:.2%}")
-        print(f"  Sharpe Ratio: {sharpe:.2f}")
+        print(f"\n  📊 RESULTADOS:")
+        print(f"    Operaciones: {metricas['n_operaciones']}")
+        print(f"    Tasa éxito: {metricas['tasa_exito']:.2%}")
+        print(f"    Hit TP: {metricas['hit_tp_rate']:.2%}")
+        print(f"    Hit SL: {metricas['hit_sl_rate']:.2%}")
+        print(f"    Retorno total: {metricas['retorno_total']:.2%}")
+        print(f"    Retorno promedio: {metricas['retorno_promedio']:.2%}")
+        print(f"    Profit Factor: {metricas['profit_factor']:.2f}")
+        print(f"    Max Drawdown: {metricas['max_drawdown']:.2%}")
+        print(f"    Sharpe Ratio: {metricas['sharpe_ratio']:.2f}")
         
-        if 'direccion' in df_ops.columns:
-            long_ops = df_ops[df_ops['direccion'] == 'LONG']
-            short_ops = df_ops[df_ops['direccion'] == 'SHORT']
-            
-            if len(long_ops) > 0:
-                print(f"  Win Rate LONG: {long_ops['retorno'].gt(0).mean():.2%}")
-            if len(short_ops) > 0:
-                print(f"  Win Rate SHORT: {short_ops['retorno'].gt(0).mean():.2%}")
+        return True
     
-    def evaluar_sistema(self):
-        """Evalúa si el sistema es viable"""
-        if not self.resultados:
-            print("❌ No hay resultados para evaluar")
-            return False
+    def es_viable(self):
+        """Evalúa si el sistema es viable para trading"""
+        if self.metricas_backtest is None:
+            return False, 0
         
-        m = self.resultados
+        m = self.metricas_backtest
+        criterios = []
         
-        criterios = {
-            'Win Rate > 50%': m['win_rate'] > 0.50,
-            'Profit Factor > 1.2': m['profit_factor'] > 1.2,
-            'Operaciones >= 10': m['n_operaciones'] >= 10,
-            'Retorno Total > 0': m['retorno_total'] > 0,
-            'Sharpe > 0': m['sharpe_ratio'] > 0,
-            'Max DD < 25%': abs(m['max_drawdown']) < 0.25
-        }
+        # Criterio 1: Tasa de éxito > 50%
+        criterios.append(m['tasa_exito'] > 0.50)
         
-        cumplidos = sum(criterios.values())
-        total = len(criterios)
+        # Criterio 2: Retorno total positivo
+        criterios.append(m['retorno_total'] > 0)
         
-        print(f"\n📋 EVALUACIÓN DE VIABILIDAD")
-        print("=" * 60)
+        # Criterio 3: Profit factor > 1.2
+        criterios.append(m['profit_factor'] > 1.2)
         
-        for criterio, cumple in criterios.items():
-            print(f"  {'✅' if cumple else '❌'} {criterio}")
+        # Criterio 4: Drawdown controlado
+        criterios.append(abs(m['max_drawdown']) < 0.25)
         
-        print(f"\n  Criterios cumplidos: {cumplidos}/{total}")
+        # Criterio 5: Suficientes operaciones
+        criterios.append(m['n_operaciones'] >= 15)
         
-        viable = cumplidos >= 4
+        # Criterio 6: Sharpe ratio positivo
+        criterios.append(m['sharpe_ratio'] > 0)
         
-        if viable:
-            print(f"\n🎉 ¡SISTEMA VIABLE!")
-            self.generar_senal_actual()
-        else:
-            print(f"\n⚠️ Sistema no viable en condiciones actuales")
+        criterios_cumplidos = sum(criterios)
+        viable = criterios_cumplidos >= 4
         
-        return viable
+        return viable, criterios_cumplidos
     
-    def generar_senal_actual(self):
-        """Genera señal actual basada en los modelos entrenados"""
-        print(f"\n🔮 GENERANDO SEÑAL ACTUAL")
-        print("=" * 60)
+    def analizar_tiempo_real(self):
+        if not self.modelos:
+            return None
         
         try:
-            # Descargar datos recientes
             df_reciente = yf.download(
                 self.ticker,
-                start=datetime.now(self.config.TIMEZONE) - timedelta(days=7),
-                end=datetime.now(self.config.TIMEZONE),
-                interval=self.config.INTERVALO,
+                start=self.fechas['actual'] - timedelta(days=7),
+                end=self.fechas['actual'],
+                interval=TradingConfig.INTERVALO,
                 progress=False
             )
-            
+
             if df_reciente.empty:
-                print("❌ No hay datos recientes")
-                return
+                return None
+
+            if isinstance(df_reciente.columns, pd.MultiIndex):
+                df_reciente.columns = df_reciente.columns.get_level_values(0)
+
+            df_reciente = df_reciente[['Open', 'High', 'Low', 'Close', 'Volume']]
+            df_reciente = IndicadoresTecnicos.calcular_features(df_reciente)
+
+            # === MEAN REVERSION ===
+            df_reciente["ret_log"] = np.log(df_reciente["Close"] / df_reciente["Close"].shift(1))
+            window = 72
+            df_reciente["mu"] = df_reciente["ret_log"].rolling(window).mean()
+            df_reciente["sigma"] = df_reciente["ret_log"].rolling(window).std()
+            df_reciente["sigma"] = df_reciente["sigma"].replace(0, np.nan)
+            df_reciente["z_mr"] = (df_reciente["ret_log"] - df_reciente["mu"]) / df_reciente["sigma"]
+
+            z_actual = df_reciente["z_mr"].iloc[-1]
+            if pd.isna(z_actual) or np.isinf(z_actual):
+                z_actual = 0
+
+            evento = "NO"
+            if z_actual > 2.2:
+                evento = "MR SHORT"
+            elif z_actual < -2.2:
+                evento = "MR LONG"
+
+            # === PREDICCIONES ===
+            predicciones = {}
+            for horizonte, modelo in self.modelos.items():
+                pred = modelo.predecir(df_reciente)
+                if pred:
+                    predicciones[horizonte] = pred
+
+            if not predicciones:
+                return None
+
+            probs_positivas = [p['probabilidad_positiva'] for p in predicciones.values()]
+            prob_promedio = np.mean(probs_positivas)
+            confianza_promedio = np.mean([p['confianza'] for p in predicciones.values()])
+
+            señal = "LONG" if prob_promedio > 0.5 else "SHORT"
+            prob_real = prob_promedio if señal == "LONG" else 1 - prob_promedio
+
+            ultima_vela = df_reciente.iloc[-1]
+            precio = ultima_vela['Close']
+            atr = ultima_vela['ATR']
+
+            if pd.isna(atr) or atr <= 0:
+                return None
+
+            min_dist = precio * 0.002
+            atr = max(atr, min_dist)
+
+            if señal == 'LONG':
+                sl = precio - TradingConfig.MULTIPLICADOR_SL * atr
+                tp = precio + TradingConfig.MULTIPLICADOR_TP * atr
+            else:
+                sl = precio + TradingConfig.MULTIPLICADOR_SL * atr
+                tp = precio - TradingConfig.MULTIPLICADOR_TP * atr
+
+            # ✅ Validación de SL y TP aquí (no al principio de la función)
+            if abs(tp - precio) < precio * 0.001:
+                return None
             
-            # Procesar features
-            df_features = FeatureEngineer.calcular_features(df_reciente)
-            
-            # Obtener predicciones
-            predicciones = []
-            confianzas = []
-            
-            for horizonte, modelo_data in self.modelos.items():
-                if modelo_data['features'][0] in df_features.columns:
-                    X_pred = df_features[modelo_data['features']].tail(1)
-                    X_scaled = modelo_data['scaler'].transform(X_pred)
-                    
-                    pred = modelo_data['modelo'].predict(X_scaled)[0]
-                    proba = modelo_data['modelo'].predict_proba(X_scaled)[0]
-                    
-                    predicciones.append(pred)
-                    confianzas.append(max(proba))
-            
-            if predicciones:
-                # Consenso
-                señal_promedio = np.mean(predicciones)
-                confianza_promedio = np.mean(confianzas)
-                
-                direccion = "LONG" if señal_promedio > 0.5 else "SHORT"
-                probabilidad = señal_promedio if direccion == "LONG" else 1 - señal_promedio
-                
-                # Calcular niveles
-                ultima_vela = df_features.iloc[-1]
-                precio = ultima_vela['Close']
-                atr = ultima_vela.get('ATR', precio * 0.02)
-                
-                if direccion == "LONG":
-                    sl = precio * (1 - self.config.SL_MULTIPLIER * atr / precio)
-                    tp = precio * (1 + self.config.TP_MULTIPLIER * atr / precio)
-                else:
-                    sl = precio * (1 + self.config.SL_MULTIPLIER * atr / precio)
-                    tp = precio * (1 - self.config.TP_MULTIPLIER * atr / precio)
-                
-                ratio_rr = abs(tp - precio) / abs(precio - sl)
-                
-                print(f"\n📡 SEÑAL:")
-                print(f"  Dirección: {direccion}")
-                print(f"  Probabilidad: {probabilidad:.2%}")
-                print(f"  Confianza: {confianza_promedio:.2%}")
-                print(f"  Precio: ${precio:,.2f}")
-                print(f"  Stop Loss: ${sl:,.2f}")
-                print(f"  Take Profit: ${tp:,.2f}")
-                print(f"  Ratio R:R: {ratio_rr:.2f}")
-                print(f"  RSI: {ultima_vela.get('RSI', 0):.1f}")
-                print(f"  Volatilidad: {ultima_vela.get('volatilidad_24h', 0)*100:.1f}%")
-                
-                # Enviar señal si cumple criterios
-                if (confianza_promedio > self.config.UMBRAL_CONFIANZA and 
-                    probabilidad > self.config.UMBRAL_PROBABILIDAD and
-                    ratio_rr > self.config.RATIO_RR_MINIMO):
-                    
-                    mensaje = (
-                        f"🚨 SEÑAL {self.ticker}\n"
-                        f"📅 {datetime.now(self.config.TIMEZONE).strftime('%Y-%m-%d %H:%M')}\n"
-                        f"📈 Dirección: {direccion}\n"
-                        f"🎯 Probabilidad: {probabilidad:.2%}\n"
-                        f"🛡️ Confianza: {confianza_promedio:.2%}\n\n"
-                        f"💰 Entrada: ${precio:,.2f}\n"
-                        f"🛑 Stop Loss: ${sl:,.2f}\n"
-                        f"🎯 Take Profit: ${tp:,.2f}\n"
-                        f"⚖️ Ratio R:R: {ratio_rr:.2f}"
-                    )
-                    
-                    # Enviar Telegram
-                    token = os.getenv("TELEGRAM_TOKEN")
-                    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-                    
-                    if token and chat_id:
-                        try:
-                            url = f"https://api.telegram.org/bot{token}/sendMessage"
-                            requests.post(url, data={"chat_id": chat_id, "text": mensaje})
-                            print("✅ Señal enviada por Telegram")
-                        except:
-                            print("⚠️ Error enviando Telegram")
-                    
-                    # Guardar última señal
-                    guardar_ultima_senal({
-                        "ticker": self.ticker,
-                        "direccion": direccion,
-                        "probabilidad": probabilidad,
-                        "fecha": str(datetime.now(self.config.TIMEZONE))
-                    })
-        
+            if abs(sl - precio) < precio * 0.001:
+                return None
+
+            ratio_rr = abs(tp - precio) / abs(precio - sl)
+            if ratio_rr < TradingConfig.RATIO_MINIMO_RR:
+                return None
+
+            return {
+                'ticker': self.ticker,
+                'fecha': datetime.now(TradingConfig.TIMEZONE),
+                'precio': precio,
+                'señal': señal,
+                'probabilidad': prob_real,
+                'confianza': confianza_promedio,
+                'stop_loss': sl,
+                'take_profit': tp,
+                'ratio_rr': ratio_rr,
+                'predicciones_detalle': predicciones,
+                'rsi': ultima_vela.get('RSI', 50),
+                'tendencia': 'ALCISTA' if ultima_vela.get('tendencia', 0) == 1 else 'BAJISTA',
+                'z_mr': float(z_actual),
+                'evento_mr': evento,
+            }
+
         except Exception as e:
-            print(f"❌ Error generando señal: {e}")
+            print(f"  ❌ Error análisis tiempo real: {e}")
+            return None
+
     
-    def ejecutar(self):
-        """Ejecuta el sistema completo"""
-        print("🚀 SISTEMA DE TRADING MEJORADO")
-        print("=" * 60)
+    def guardar_modelos(self):
+        """Guarda modelos entrenados"""
+        if not self.modelos:
+            return False
+        
+        path_ticker = TradingConfig.MODELOS_DIR / self.ticker
+        path_ticker.mkdir(parents=True, exist_ok=True)
+        
+        for horizonte, modelo in self.modelos.items():
+            path_modelo = path_ticker / f"modelo_{horizonte}h.pkl"
+            modelo.guardar(path_modelo)
+        
+        print(f"  💾 Modelos guardados en {path_ticker}")
+        return True
+
+
+# ============================================
+# FUNCIÓN PRINCIPAL
+# ============================================
+
+def main():
+
+    print("🚀 SISTEMA DE TRADING MEJORADO")
+    print("=" * 80)
+    
+    fechas = TradingConfig.get_fechas()
+    print(f"\n📅 Configuración temporal:")
+    print(f"  Actual: {fechas['actual'].date()}")
+    print(f"  Entrenamiento desde: {fechas['inicio_entrenamiento'].date()}")
+    print(f"  Backtest desde: {fechas['inicio_backtest'].date()}")
+    print(f"  Intervalo: {TradingConfig.INTERVALO}")
+    print(f"  Horizontes: {TradingConfig.HORIZONTES} horas")
+    
+    resultados_globales = {}
+    
+    # Procesar cada ticker
+    for ticker in TradingConfig.ACTIVOS:
+        sistema = SistemaTradingTicker(ticker)
         
         # 1. Descargar datos
-        if not self.descargar_datos():
-            return
+        if not sistema.descargar_datos():
+            continue
         
         # 2. Entrenar modelos
-        self.entrenar_todos_modelos()
-        
-        if not self.modelos:
-            print("❌ No se pudieron entrenar modelos")
-            return
+        if not sistema.entrenar_modelos():
+            print(f"  ❌ No se pudieron entrenar modelos para {ticker}")
+            continue
         
         # 3. Backtest
-        if not self.ejecutar_backtest():
-            print("❌ Backtest fallido")
-            return
+        if not sistema.ejecutar_backtest():
+            print(f"  ❌ Backtest fallido para {ticker}")
+            continue
         
-        # 4. Evaluar
-        self.evaluar_sistema()
+        # 4. Evaluar viabilidad
+        viable, criterios = sistema.es_viable()
+        
+        print(f"\n{'='*80}")
+        print(f"📊 EVALUACIÓN - {ticker}")
+        print(f"{'='*80}")
+        print(f"  Criterios cumplidos: {criterios}/6")
+        print(f"  Viable: {'✅ SÍ' if viable else '❌ NO'}")
+        
+        # 5. Análisis tiempo real (solo si es viable)
+        señal_actual = None
+
+        if viable:
+            try:
+                señal_actual = sistema.analizar_tiempo_real()
+
+                if (
+                    señal_actual
+                    and señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN
+                    and señal_actual['probabilidad'] >= TradingConfig.UMBRAL_PROBABILIDAD_MIN
+                ):
+
+                    print(f"\n  🚨 SEÑAL DETECTADA:")
+                    print(f"    Dirección: {señal_actual['señal']}")
+                    print(f"    Probabilidad: {señal_actual['probabilidad']:.2%}")
+                    print(f"    Confianza: {señal_actual['confianza']:.2%}")
+                    print(f"    Precio: ${señal_actual['precio']:,.2f}")
+                    print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
+                    print(f"    TP: ${señal_actual['take_profit']:,.2f}")
+                    print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
+
+                    # 🔁 Control de repetición
+                    ultima = cargar_ultima_senal()
+                    if ultima and ultima["ticker"] == ticker and ultima["señal"] == señal_actual["señal"]:
+                        print("🔁 Señal repetida. No se envía.")
+                    else:
+                        fecha = señal_actual['fecha'].strftime("%Y-%m-%d %H:%M")
+
+                        enviar_telegram(
+                            f"📊 SEÑAL {ticker}\n"
+                            f"🕒 Fecha: {fecha}\n"
+                            f"⏱ TF: {TradingConfig.INTERVALO}\n"
+                            f"📈 Tendencia: {señal_actual['tendencia']}\n"
+                            f"📊 RSI: {señal_actual['rsi']:.1f}\n\n"
+                            f"Dirección: {señal_actual['señal']}\n"
+                            f"Probabilidad: {señal_actual['probabilidad']:.2%}\n"
+                            f"Confianza: {señal_actual['confianza']:.2%}\n\n"
+                            f"🎯 Entrada: {señal_actual['precio']:.2f}\n"
+                            f"🛑 SL: {señal_actual['stop_loss']:.2f}\n"
+                            f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
+                            f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}\n"
+                            f"📐 Mean Reversion: {señal_actual['evento_mr']}\n"
+                            f"📐 Z-score: {señal_actual['z_mr']:.2f}\n\n"
+                        )
+
+                        guardar_ultima_senal({
+                            "ticker": ticker,
+                            "señal": señal_actual["señal"],
+                            "fecha": str(señal_actual["fecha"])
+                        })
+
+            except Exception as e:
+                print(f"❌ Error en análisis tiempo real: {e}")
 
 
-# ============================================
-# EJECUCIÓN PRINCIPAL
-# ============================================
+        # 6. Guardar modelos
+        if viable:
+            sistema.guardar_modelos()
+        
+        resultados_globales[ticker] = {
+            'viable': viable,
+            'criterios': criterios,
+            'metricas': sistema.metricas_backtest,
+            'señal_actual': señal_actual
+        }
+    
+    # Resumen final
+    print(f"\n{'='*80}")
+    print("📊 RESUMEN GLOBAL")
+    print(f"{'='*80}")
+    
+    viables = [t for t, r in resultados_globales.items() if r['viable']]
+    
+    print(f"\n  Tickers procesados: {len(resultados_globales)}")
+    print(f"  Tickers viables: {len(viables)}")
+    
+    if viables:
+        print(f"\n  ✅ TICKERS VIABLES:")
+        for ticker in viables:
+            r = resultados_globales[ticker]
+            m = r['metricas']
+            print(f"    {ticker}: Retorno {m['retorno_total']:.2%}, "
+                  f"Win rate {m['tasa_exito']:.2%}, "
+                  f"PF {m['profit_factor']:.2f}")
+    
+    return resultados_globales
+
 
 if __name__ == "__main__":
-    # Instanciar y ejecutar sistema
-    sistema = TradingSystem("BTC-USD")
-    sistema.ejecutar()
+    main()
