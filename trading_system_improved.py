@@ -900,8 +900,6 @@ class SistemaTradingTicker:
 # ============================================
 
 def main():
-    enviar_telegram("🧪 BOT ARRANCÓ EN GITHUB ACTIONS")
-    print("=" * 80)
 
     print("🚀 SISTEMA DE TRADING MEJORADO")
     print("=" * 80)
