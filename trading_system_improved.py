@@ -866,9 +866,9 @@ class SistemaTradingTicker:
                 'evento_mr': evento,
              }
 
-    except Exception as e:
-        print(f"  ❌ Error análisis tiempo real: {e}")
-        return None
+         except Exception as e:
+             print(f"  ❌ Error análisis tiempo real: {e}")
+             return None
     
     def guardar_modelos(self):
         """Guarda modelos entrenados"""
@@ -936,6 +936,7 @@ def main():
         
         # 5. Análisis tiempo real (solo si es viable)
         señal_actual = None
+        
         if viable:
            señal_actual = sistema.analizar_tiempo_real()
 
