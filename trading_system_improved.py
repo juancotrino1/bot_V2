@@ -81,15 +81,6 @@ class CCXTDataProvider:
         # Mapeo de símbolos Yahoo Finance -> Exchange
         self.symbol_mapping = {
             'BTC-USD': 'BTC/USDT',
-            'ETH-USD': 'ETH/USDT',
-            'SOL-USD': 'SOL/USDT',
-            'BNB-USD': 'BNB/USDT',
-            'DOGE-USD': 'DOGE/USDT',
-            'ADA-USD': 'ADA/USDT',
-            'LINK-USD': 'LINK/USDT',
-            'SUI20947-USD': 'SUI/USDT',
-            'AAVE-USD': 'AAVE/USDT',
-            'NEAR-USD': 'NEAR/USDT',
         }
         
         # Mapeo de intervalos
