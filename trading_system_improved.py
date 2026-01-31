@@ -968,8 +968,7 @@ def main():
                        f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
                        f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}"
                        f"📐 Mean Reversion: {señal_actual['evento_mr']}\n"
-                       f"Z-score: {señal_actual['z_mr']:.2f}\n\n"
-
+                       f"📐 Z-score: {señal_actual['z_mr']:.2f}\n\n"
                    )
 
                    guardar_ultima_senal({
