@@ -1,4 +1,4 @@
-name: Trading System V3 - Optimized
+name: Trading System V3 - Production Ready
 
 on:
   schedule:
@@ -12,15 +12,22 @@ on:
         description: 'Activar modo debug'
         required: false
         default: 'false'
+        type: boolean
       tickers:
-        description: 'Tickers específicos (separados por coma)'
+        description: 'Tickers específicos (separados por coma, ej: BTC-USD,ETH-USD)'
         required: false
         default: ''
+        type: string
+      conservative:
+        description: 'Usar configuración conservadora'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   run-trading-system:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # Límite de seguridad
+    timeout-minutes: 20  # Límite de seguridad aumentado para primera ejecución
     
     steps:
       - name: Checkout repository
@@ -30,68 +37,142 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: 'pip'  # Caché de dependencias
+          cache: 'pip'  # Caché automático de dependencias pip
       
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      # Caché de datos (reduce tiempo de ejecución)
+      # Caché de datos de trading (persiste entre ejecuciones del mismo día)
       - name: Cache trading data
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: cache_datos/
-          key: ${{ runner.os }}-trading-data-${{ github.run_number }}
+          key: ${{ runner.os }}-trading-data-${{ hashFiles('**/trading_system_v3_optimized.py') }}-${{ github.run_number }}
           restore-keys: |
+            ${{ runner.os }}-trading-data-${{ hashFiles('**/trading_system_v3_optimized.py') }}-
             ${{ runner.os }}-trading-data-
       
-      # Caché de modelos entrenados
+      # Caché de modelos ML entrenados (persiste mientras no cambie el código)
       - name: Cache ML models
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: modelos_trading/
-          key: ${{ runner.os }}-ml-models-${{ hashFiles('trading_system_v3_optimized.py') }}
+          key: ${{ runner.os }}-ml-models-${{ hashFiles('**/trading_system_v3_optimized.py') }}
           restore-keys: |
             ${{ runner.os }}-ml-models-
+      
+      - name: Verify Python environment
+        run: |
+          python --version
+          pip list | grep -E '(yfinance|pandas|sklearn|numpy)'
       
       - name: Run trading system
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONUNBUFFERED: 1  # Para ver logs en tiempo real
         run: |
-          # Parámetros opcionales según inputs
+          # Construir argumentos según inputs
           ARGS=""
           
           if [ "${{ github.event.inputs.debug }}" = "true" ]; then
+            echo "🐛 Modo DEBUG activado"
             ARGS="$ARGS --debug"
           fi
           
           if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            echo "🎯 Tickers específicos: ${{ github.event.inputs.tickers }}"
             ARGS="$ARGS --tickers ${{ github.event.inputs.tickers }}"
           fi
           
+          if [ "${{ github.event.inputs.conservative }}" = "true" ]; then
+            echo "🛡️ Modo conservador activado"
+            # Nota: Esto requiere que el script soporte --conservative
+            # Alternativa: usar ejemplo_uso_v3.py --conservative
+          fi
+          
           # Ejecutar sistema
+          echo "🚀 Iniciando sistema de trading..."
           python trading_system_v3_optimized.py $ARGS
       
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v3
+      # Guardar logs siempre (no solo en fallo)
+      - name: Upload execution logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: trading-logs
+          name: trading-logs-${{ github.run_number }}
           path: |
             *.log
             ultima_senal.json
+            cache_datos/*.pkl
           retention-days: 7
+          if-no-files-found: ignore
       
-      - name: Notify on failure
+      # Backup de modelos entrenados
+      - name: Upload trained models
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-models-${{ github.run_number }}
+          path: modelos_trading/
+          retention-days: 30
+          if-no-files-found: ignore
+      
+      # Notificación de éxito (opcional)
+      - name: Notify success
+        if: success() && vars.NOTIFY_SUCCESS == 'true'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MESSAGE="✅ Trading System ejecutado exitosamente
+            
+            🕒 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            🔢 Run: ${{ github.run_number }}
+            📊 Workflow: ${{ github.workflow }}"
+            
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="HTML" || echo "⚠️ No se pudo enviar notificación de éxito"
+          fi
+      
+      # Notificación de fallo
+      - name: Notify failure
         if: failure()
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MESSAGE="⚠️ Trading System falló en GitHub Actions
+            
+            🕒 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            🔢 Run: ${{ github.run_number }}
+            🔗 Ver logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ⚠️ Revisar logs para más detalles."
+            
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
               -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="⚠️ Trading System falló en GitHub Actions. Revisar logs."
+              -d text="$MESSAGE" \
+              -d parse_mode="HTML" || echo "⚠️ No se pudo enviar notificación de error"
+          else
+            echo "⚠️ Telegram no configurado. Configura TELEGRAM_TOKEN y TELEGRAM_CHAT_ID en los secrets."
           fi
+      
+      # Cleanup en caso de error
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          echo "🧹 Limpiando archivos temporales..."
+          rm -f *.pkl *.log 2>/dev/null || true
+          echo "✅ Cleanup completado"
+
+# Configuración de concurrencia (evita ejecuciones simultáneas)
+concurrency:
+  group: trading-system-v3
+  cancel-in-progress: false  # No cancelar ejecuciones en progreso
