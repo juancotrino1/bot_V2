@@ -1,22 +1,19 @@
 # ============================================
-# REQUIREMENTS.TXT - SISTEMA DE TRADING CON CCXT
+# REQUIREMENTS.TXT - SISTEMA DE TRADING MEJORADO
 # ============================================
 
-# === FUENTE DE DATOS ===
-ccxt>=4.2.0                    # Exchange connectivity (NUEVO - reemplaza yfinance)
 
 # === MACHINE LEARNING ===
 numpy>=1.24.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 joblib>=1.3.0
+xgboost>=2.0.0          # ¡NUEVO! Para el modelo XGBoost
 
 # === UTILIDADES ===
 requests>=2.31.0               # Para Telegram
 pytz>=2023.3                   # Timezones
-
-# === OPCIONAL (mantener yfinance como backup) ===
-yfinance>=0.2.0              # Descomentar si quieres mantener como fallback
+yfinance>=0.2.0                # Para descargar datos de Yahoo Finance
 
 # === NOTAS DE INSTALACIÓN ===
 # 
@@ -24,7 +21,7 @@ yfinance>=0.2.0              # Descomentar si quieres mantener como fallback
 #   pip install -r requirements.txt
 #
 # O instalar individualmente:
-#   pip install ccxt numpy pandas scikit-learn joblib requests pytz
+#   pip install yfinance numpy pandas scikit-learn joblib requests pytz xgboost
 #
 # Para verificar versiones:
-#   pip list | grep -E "ccxt|numpy|pandas|scikit|joblib|requests|pytz"
+#   pip list | grep -E "yfinance|xgboost|numpy|pandas|scikit|joblib|requests|pytz"
