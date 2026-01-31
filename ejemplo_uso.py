@@ -1,49 +1,115 @@
 #!/usr/bin/env python3
 """
-EJEMPLO DE USO RÁPIDO DEL SISTEMA DE TRADING MEJORADO
-
-Este script muestra cómo usar el sistema para:
-1. Entrenamiento inicial
-2. Análisis de un ticker
-3. Monitoreo en tiempo real
+EJEMPLO DE USO - SISTEMA V3 OPTIMIZADO
+======================================
+Scripts rápidos para usar el sistema sin complicaciones
 """
 
-from trading_system_improved import (
-    SistemaTradingTicker,
-    TradingConfig
+from trading_system_v3_optimized import (
+    TradingConfig, 
+    SistemaTicker, 
+    DataCache,
+    ejecutar_sistema_completo,
+    logger
 )
-import time
+import logging
 
 # ============================================
-# EJEMPLO 1: ANÁLISIS COMPLETO DE UN TICKER
+# USO BÁSICO: EJECUTAR TODO
 # ============================================
 
-def ejemplo_analisis_completo():
-    """Análisis completo de BTC: entrenamiento + backtest + señal actual"""
+def ejemplo_1_ejecutar_todo():
+    """
+    Forma más simple: ejecuta todo el sistema con configuración por defecto
+    """
+    print("\n" + "="*80)
+    print("EJEMPLO 1: EJECUTAR SISTEMA COMPLETO")
+    print("="*80 + "\n")
     
-    print("=" * 80)
-    print("EJEMPLO 1: ANÁLISIS COMPLETO DE BTC-USD")
-    print("=" * 80)
+    # Ejecutar con defaults
+    resultados = ejecutar_sistema_completo()
     
-    # Crear sistema para BTC
-    sistema = SistemaTradingTicker("BTC-USD")
+    # Los resultados ya se muestran en consola automáticamente
+    # Pero puedes acceder a ellos programáticamente:
     
-    # 1. Descargar datos
+    for ticker, data in resultados.items():
+        if data['viable']:
+            print(f"\n✅ {ticker} es viable para trading")
+            print(f"   Win Rate: {data['metricas']['win_rate']:.1%}")
+            print(f"   Profit Factor: {data['metricas']['pf']:.2f}")
+
+
+# ============================================
+# USO INTERMEDIO: CONFIGURACIÓN PERSONALIZADA
+# ============================================
+
+def ejemplo_2_config_personalizada():
+    """
+    Configuración personalizada para trading conservador
+    """
+    print("\n" + "="*80)
+    print("EJEMPLO 2: CONFIGURACIÓN CONSERVADORA")
+    print("="*80 + "\n")
+    
+    # Crear config personalizada
+    config = TradingConfig(
+        # Solo los mejores activos
+        ACTIVOS=["BTC-USD", "ETH-USD"],
+        
+        # Horizontes más cortos para más señales
+        HORIZONTES=[1, 2, 4],
+        
+        # Umbrales más estrictos
+        UMBRAL_PROBABILIDAD_MIN=0.70,  # Solo señales muy confiables
+        UMBRAL_CONFIANZA_MIN=0.65,
+        
+        # Risk management conservador
+        MULTIPLICADOR_SL=2.5,  # SL más amplio
+        MULTIPLICADOR_TP=4.0,  # TP más ambicioso
+        RATIO_MINIMO_RR=2.0,   # Mínimo 2:1 R:R
+        
+        # Logging detallado
+        LOG_LEVEL="DEBUG"
+    )
+    
+    # Ejecutar
+    resultados = ejecutar_sistema_completo(config, paralelo=False)
+    
+    return resultados
+
+
+# ============================================
+# USO AVANZADO: ANÁLISIS DE UN TICKER
+# ============================================
+
+def ejemplo_3_ticker_individual(ticker="BTC-USD"):
+    """
+    Análisis detallado de un solo ticker
+    """
+    print("\n" + "="*80)
+    print(f"EJEMPLO 3: ANÁLISIS INDIVIDUAL - {ticker}")
+    print("="*80 + "\n")
+    
+    config = TradingConfig()
+    cache = DataCache(config.CACHE_DIR)
+    
+    # Crear sistema
+    sistema = SistemaTicker(ticker, config, cache)
+    
+    # Pipeline completo
     if not sistema.descargar_datos():
-        print("❌ Error descargando datos")
-        return
+        print(f"❌ Error descargando {ticker}")
+        return None
     
-    # 2. Entrenar modelos
     if not sistema.entrenar_modelos():
-        print("❌ Error entrenando modelos")
-        return
+        print(f"❌ Error entrenando {ticker}")
+        return None
     
-    # 3. Ejecutar backtest
-    if not sistema.ejecutar_backtest():
-        print("❌ Error en backtest")
-        return
+    if not sistema.backtest():
+        print(f"❌ Error en backtest {ticker}")
+        return None
     
-    # 4. Evaluar viabilidad
+    # Evaluar
     viable, criterios = sistema.es_viable()
     
     print(f"\n{'='*80}")
@@ -51,272 +117,171 @@ def ejemplo_analisis_completo():
     print(f"Criterios cumplidos: {criterios}/6")
     print(f"{'='*80}")
     
-    # 5. Si es viable, analizar señal actual
+    # Mostrar métricas detalladas
+    if sistema.metricas_bt:
+        m = sistema.metricas_bt
+        print(f"\n📊 MÉTRICAS DE BACKTEST:")
+        print(f"   Operaciones: {m['n_ops']}")
+        print(f"   Win Rate: {m['win_rate']:.1%}")
+        print(f"   Profit Factor: {m['pf']:.2f}")
+        print(f"   Retorno Total: {m['ret_total']:.2%}")
+        print(f"   Retorno Promedio: {m['ret_promedio']:.2%}")
+        print(f"   Sharpe Ratio: {m['sharpe']:.2f}")
+        print(f"   Max Drawdown: {m['max_dd']:.2%}")
+    
+    # Análisis actual
     if viable:
-        print("\n🔍 Analizando condiciones actuales...")
-        señal = sistema.analizar_tiempo_real()
+        print(f"\n🔍 Analizando condiciones actuales...")
+        senal = sistema.analizar_actual()
         
-        if señal:
-            mostrar_señal(señal)
+        if senal:
+            mostrar_senal_detallada(senal)
             sistema.guardar_modelos()
         else:
-            print("✅ No hay señales en este momento")
+            print("   ✅ Sin señales en este momento")
     
-    return sistema, viable
+    return sistema
 
 
 # ============================================
-# EJEMPLO 2: ANÁLISIS RÁPIDO (SOLO TIEMPO REAL)
+# USO EXPERTO: MONITOREO CONTINUO
 # ============================================
 
-def ejemplo_analisis_rapido(ticker="ETH-USD"):
+def ejemplo_4_monitoreo_continuo(intervalo_minutos=60):
     """
-    Análisis rápido usando modelos ya entrenados
-    (Asume que ya ejecutaste el sistema completo antes)
+    Monitoreo continuo cada X minutos
     """
+    import time
+    from datetime import datetime
     
-    print("=" * 80)
-    print(f"EJEMPLO 2: ANÁLISIS RÁPIDO DE {ticker}")
-    print("=" * 80)
-    
-    sistema = SistemaTradingTicker(ticker)
-    
-    # Intentar cargar modelos existentes
-    from pathlib import Path
-    path_modelos = TradingConfig.MODELOS_DIR / ticker
-    
-    if not path_modelos.exists():
-        print(f"⚠️ No hay modelos entrenados para {ticker}")
-        print("Ejecuta primero ejemplo_analisis_completo()")
-        return None
-    
-    # Descargar solo datos recientes
-    sistema.descargar_datos()
-    
-    # Analizar
-    señal = sistema.analizar_tiempo_real()
-    
-    if señal:
-        mostrar_señal(señal)
-    else:
-        print(f"✅ {ticker}: Sin señales actualmente")
-    
-    return señal
-
-
-# ============================================
-# EJEMPLO 3: MONITOREO CONTINUO
-# ============================================
-
-def ejemplo_monitoreo_continuo(tickers=["BTC-USD", "ETH-USD"], intervalo_minutos=60):
-    """
-    Monitorea múltiples tickers continuamente
-    
-    Args:
-        tickers: Lista de tickers a monitorear
-        intervalo_minutos: Frecuencia de revisión
-    """
-    
-    print("=" * 80)
-    print(f"EJEMPLO 3: MONITOREO CONTINUO")
-    print(f"Tickers: {', '.join(tickers)}")
+    print("\n" + "="*80)
+    print(f"EJEMPLO 4: MONITOREO CONTINUO")
     print(f"Intervalo: {intervalo_minutos} minutos")
-    print("=" * 80)
-    print("\n⚠️ Presiona Ctrl+C para detener\n")
+    print("⚠️  Presiona Ctrl+C para detener")
+    print("="*80 + "\n")
+    
+    config = TradingConfig(
+        ACTIVOS=["BTC-USD", "ETH-USD", "SOL-USD"],
+        LOG_LEVEL="INFO"
+    )
     
     iteracion = 0
     
     try:
         while True:
             iteracion += 1
+            
             print(f"\n{'='*80}")
-            print(f"ITERACIÓN {iteracion} - {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"{'='*80}")
+            print(f"⏰ ITERACIÓN {iteracion} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"{'='*80}\n")
             
-            señales_detectadas = []
+            # Ejecutar análisis
+            resultados = ejecutar_sistema_completo(config, paralelo=True)
             
-            for ticker in tickers:
-                print(f"\n🔍 Analizando {ticker}...")
-                
-                try:
-                    señal = ejemplo_analisis_rapido(ticker)
-                    if señal and señal['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN:
-                        señales_detectadas.append(señal)
-                except Exception as e:
-                    print(f"❌ Error en {ticker}: {e}")
+            # Resumen de señales
+            senales_activas = []
+            for ticker, data in resultados.items():
+                if data.get('senal') and data['senal']['confianza'] >= config.UMBRAL_CONFIANZA_MIN:
+                    senal = data['senal']
+                    # Filtro mean reversion
+                    if senal.get('evento_mr') == senal['senal']:
+                        senales_activas.append(senal)
             
-            # Resumen
-            if señales_detectadas:
-                print(f"\n{'='*80}")
-                print(f"🚨 {len(señales_detectadas)} SEÑALES DETECTADAS")
-                print(f"{'='*80}")
-                for señal in señales_detectadas:
-                    print(f"\n{señal['ticker']}: {señal['señal']} (Confianza: {señal['confianza']:.0%})")
+            if senales_activas:
+                print(f"\n🚨 {len(senales_activas)} SEÑALES ACTIVAS:")
+                for senal in senales_activas:
+                    print(f"   {senal['ticker']}: {senal['senal']} (Conf: {senal['confianza']:.1%})")
             else:
-                print(f"\n✅ Sin señales en esta iteración")
+                print("\n✅ Sin señales en esta iteración")
             
             # Esperar
             print(f"\n⏳ Próxima revisión en {intervalo_minutos} minutos...")
             time.sleep(intervalo_minutos * 60)
-    
+            
     except KeyboardInterrupt:
-        print("\n\n⚠️ Monitoreo detenido por el usuario")
-
-
-# ============================================
-# EJEMPLO 4: BATCH PROCESSING DE TODOS LOS TICKERS
-# ============================================
-
-def ejemplo_procesar_todos():
-    """Procesa todos los tickers configurados y muestra resumen"""
-    
-    print("=" * 80)
-    print("EJEMPLO 4: PROCESAMIENTO COMPLETO DE TODOS LOS TICKERS")
-    print("=" * 80)
-    
-    resultados = {}
-    tickers_viables = []
-    
-    for ticker in TradingConfig.ACTIVOS:
-        print(f"\n{'='*80}")
-        print(f"Procesando {ticker}...")
-        print(f"{'='*80}")
-        
-        sistema = SistemaTradingTicker(ticker)
-        
-        # Pipeline completo
-        if sistema.descargar_datos():
-            if sistema.entrenar_modelos():
-                if sistema.ejecutar_backtest():
-                    viable, criterios = sistema.es_viable()
-                    
-                    resultados[ticker] = {
-                        'viable': viable,
-                        'criterios': criterios,
-                        'metricas': sistema.metricas_backtest
-                    }
-                    
-                    if viable:
-                        tickers_viables.append(ticker)
-                        sistema.guardar_modelos()
-    
-    # Resumen final
-    print(f"\n{'='*80}")
-    print("RESUMEN FINAL")
-    print(f"{'='*80}")
-    print(f"\nTickers procesados: {len(resultados)}/{len(TradingConfig.ACTIVOS)}")
-    print(f"Tickers viables: {len(tickers_viables)}")
-    
-    if tickers_viables:
-        print(f"\n✅ TICKERS VIABLES:")
-        for ticker in tickers_viables:
-            m = resultados[ticker]['metricas']
-            print(f"\n  {ticker}:")
-            print(f"    Win Rate: {m['tasa_exito']:.1%}")
-            print(f"    Profit Factor: {m['profit_factor']:.2f}")
-            print(f"    Retorno Total: {m['retorno_total']:.2%}")
-            print(f"    Sharpe Ratio: {m['sharpe_ratio']:.2f}")
-    
-    return resultados, tickers_viables
+        print("\n\n⚠️  Monitoreo detenido por usuario")
 
 
 # ============================================
 # UTILIDADES
 # ============================================
 
-def mostrar_señal(señal):
-    """Formatea y muestra una señal de trading"""
+def mostrar_senal_detallada(senal):
+    """Muestra señal de forma legible"""
     
     print(f"\n{'='*80}")
-    print(f"🚨 SEÑAL DE TRADING - {señal['ticker']}")
+    print(f"🚨 SEÑAL DE TRADING - {senal['ticker']}")
     print(f"{'='*80}")
     
-    print(f"\n📅 Fecha: {señal['fecha']}")
-    print(f"💰 Precio actual: ${señal['precio']:,.2f}")
-    print(f"🎯 Dirección: {señal['señal']}")
+    print(f"\n📅 Fecha: {senal['fecha'].strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"💰 Precio: ${senal['precio']:,.2f}")
+    print(f"🎯 Dirección: {senal['senal']}")
     
     print(f"\n📊 CONFIANZA:")
-    print(f"  Probabilidad: {señal['probabilidad']:.1%}")
-    print(f"  Confianza: {señal['confianza']:.1%}")
+    print(f"   Probabilidad: {senal['prob']:.1%}")
+    print(f"   Confianza: {senal['confianza']:.1%}")
     
     print(f"\n💰 GESTIÓN DE RIESGO:")
-    print(f"  🛑 Stop Loss: ${señal['stop_loss']:,.2f} ({abs(señal['stop_loss']/señal['precio']-1)*100:.2f}%)")
-    print(f"  🎯 Take Profit: ${señal['take_profit']:,.2f} ({abs(señal['take_profit']/señal['precio']-1)*100:.2f}%)")
-    print(f"  ⚖️ Ratio R:R: {señal['ratio_rr']:.2f}:1")
+    riesgo_pct = abs(senal['sl'] / senal['precio'] - 1) * 100
+    reward_pct = abs(senal['tp'] / senal['precio'] - 1) * 100
+    
+    print(f"   🛑 Stop Loss: ${senal['sl']:,.2f} ({riesgo_pct:.2f}%)")
+    print(f"   🎯 Take Profit: ${senal['tp']:,.2f} ({reward_pct:.2f}%)")
+    print(f"   ⚖️  Ratio R:R: {senal['rr']:.2f}:1")
     
     print(f"\n📈 CONTEXTO TÉCNICO:")
-    print(f"  RSI: {señal.get('rsi', 'N/A'):.1f}")
-    print(f"  Tendencia: {señal.get('tendencia', 'N/A')}")
+    print(f"   RSI: {senal['rsi']:.1f}")
+    print(f"   Tendencia: {senal['tendencia']}")
+    print(f"   Z-Score MR: {senal['z_mr']:.2f}")
     
-    print(f"\n🔮 PREDICCIONES POR HORIZONTE:")
-    for horizonte, pred in señal.get('predicciones_detalle', {}).items():
-        direccion = "📈 ALCISTA" if pred['prediccion'] == 1 else "📉 BAJISTA"
-        print(f"  {horizonte}h: {direccion} (Confianza: {pred['confianza']:.1%})")
+    # Predicciones por horizonte
+    if senal.get('preds'):
+        print(f"\n🔮 PREDICCIONES POR HORIZONTE:")
+        for h, pred in senal['preds'].items():
+            direccion = "📈 LONG" if pred['prediccion'] == 1 else "📉 SHORT"
+            print(f"   {h}h: {direccion} (Conf: {pred['confianza']:.1%})")
     
     # Recomendación
-    if señal['confianza'] >= 0.70 and señal['ratio_rr'] >= 2.0:
-        recomendacion = "🟢 SEÑAL FUERTE - CONSIDERAR OPERACIÓN"
-    elif señal['confianza'] >= 0.60 and señal['ratio_rr'] >= 1.5:
-        recomendacion = "🟡 SEÑAL MODERADA - MONITOREAR"
+    if senal['confianza'] >= 0.70 and senal['rr'] >= 2.0:
+        rec = "🟢 SEÑAL FUERTE - Considerar operación"
+    elif senal['confianza'] >= 0.60 and senal['rr'] >= 1.5:
+        rec = "🟡 SEÑAL MODERADA - Monitorear"
     else:
-        recomendacion = "🔴 SEÑAL DÉBIL - ESPERAR MEJOR OPORTUNIDAD"
+        rec = "🔴 SEÑAL DÉBIL - Esperar mejor oportunidad"
     
-    print(f"\n💡 RECOMENDACIÓN: {recomendacion}")
-    print(f"{'='*80}")
+    print(f"\n💡 RECOMENDACIÓN: {rec}")
+    print(f"{'='*80}\n")
 
 
-def enviar_alerta_telegram(señal, bot_token=None, chat_id=None):
-    """
-    Envía alerta de trading por Telegram
+def mostrar_comparacion_tickers(resultados):
+    """Compara performance de múltiples tickers"""
     
-    Args:
-        señal: Diccionario con información de la señal
-        bot_token: Token del bot de Telegram
-        chat_id: ID del chat donde enviar
-    """
-    import os
-    import requests
+    print("\n" + "="*80)
+    print("📊 COMPARACIÓN DE TICKERS")
+    print("="*80 + "\n")
     
-    if not bot_token:
-        bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    if not chat_id:
-        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    # Filtrar viables
+    viables = {t: r for t, r in resultados.items() if r.get('viable')}
     
-    if not bot_token or not chat_id:
-        print("⚠️ Credenciales de Telegram no configuradas")
-        return False
+    if not viables:
+        print("❌ No hay tickers viables para comparar")
+        return
     
-    mensaje = f"""
-🚨 *SEÑAL DE TRADING*
-
-🪙 *{señal['ticker']}*
-📅 {señal['fecha'].strftime('%Y-%m-%d %H:%M')}
-
-💰 *Precio:* ${señal['precio']:,.2f}
-🎯 *Dirección:* {señal['señal']}
-📊 *Confianza:* {señal['confianza']:.0%}
-
-*NIVELES:*
-🛑 SL: ${señal['stop_loss']:,.2f}
-🎯 TP: ${señal['take_profit']:,.2f}
-⚖️ R:R: {señal['ratio_rr']:.2f}:1
-
-RSI: {señal.get('rsi', 'N/A'):.0f}
-Tendencia: {señal.get('tendencia', 'N/A')}
-"""
+    # Ordenar por profit factor
+    ranking = sorted(
+        viables.items(), 
+        key=lambda x: x[1]['metricas']['pf'], 
+        reverse=True
+    )
     
-    try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": mensaje,
-            "parse_mode": "Markdown"
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"❌ Error enviando a Telegram: {e}")
-        return False
+    print(f"{'Ticker':<12} {'Win Rate':<12} {'PF':<8} {'Retorno':<12} {'Sharpe':<8}")
+    print("-" * 80)
+    
+    for ticker, data in ranking:
+        m = data['metricas']
+        print(f"{ticker:<12} {m['win_rate']:>10.1%}  {m['pf']:>6.2f}  {m['ret_total']:>10.2%}  {m['sharpe']:>6.2f}")
+    
+    print("\n" + "="*80)
 
 
 # ============================================
@@ -327,57 +292,56 @@ def menu_principal():
     """Menú interactivo para ejecutar ejemplos"""
     
     while True:
-        print("\n" + "=" * 80)
-        print("SISTEMA DE TRADING - MENÚ DE EJEMPLOS")
-        print("=" * 80)
-        print("\n1. Análisis completo de un ticker (entrenamiento + backtest + señal)")
-        print("2. Análisis rápido (solo señal actual)")
-        print("3. Monitoreo continuo de múltiples tickers")
-        print("4. Procesar todos los tickers configurados")
-        print("5. Mostrar configuración actual")
+        print("\n" + "="*80)
+        print("🚀 SISTEMA DE TRADING V3 - MENÚ DE EJEMPLOS")
+        print("="*80)
+        print("\n1. Ejecutar sistema completo (todos los tickers)")
+        print("2. Configuración conservadora (solo BTC y ETH)")
+        print("3. Analizar ticker individual")
+        print("4. Monitoreo continuo")
+        print("5. Comparar performance de tickers")
+        print("6. Modo debug (logging detallado)")
         print("0. Salir")
         
-        opcion = input("\n👉 Selecciona una opción: ")
+        opcion = input("\n👉 Selecciona opción: ").strip()
         
-        if opcion == "1":
-            ticker = input("Ticker a analizar (ej: BTC-USD): ").upper()
-            sistema = SistemaTradingTicker(ticker)
-            ejemplo_analisis_completo()
+        try:
+            if opcion == "1":
+                ejemplo_1_ejecutar_todo()
+            
+            elif opcion == "2":
+                ejemplo_2_config_personalizada()
+            
+            elif opcion == "3":
+                ticker = input("Ticker (ej: BTC-USD): ").strip().upper()
+                ejemplo_3_ticker_individual(ticker)
+            
+            elif opcion == "4":
+                intervalo = int(input("Intervalo en minutos (ej: 60): "))
+                ejemplo_4_monitoreo_continuo(intervalo)
+            
+            elif opcion == "5":
+                print("\nEjecutando análisis completo...")
+                resultados = ejecutar_sistema_completo()
+                mostrar_comparacion_tickers(resultados)
+            
+            elif opcion == "6":
+                logger.setLevel(logging.DEBUG)
+                print("\n✅ Modo DEBUG activado")
+                ejemplo_1_ejecutar_todo()
+            
+            elif opcion == "0":
+                print("\n👋 ¡Hasta luego!")
+                break
+            
+            else:
+                print("\n❌ Opción inválida")
         
-        elif opcion == "2":
-            ticker = input("Ticker a analizar (ej: ETH-USD): ").upper()
-            ejemplo_analisis_rapido(ticker)
-        
-        elif opcion == "3":
-            tickers_input = input("Tickers separados por comas (ej: BTC-USD,ETH-USD): ")
-            tickers = [t.strip().upper() for t in tickers_input.split(",")]
-            intervalo = int(input("Intervalo en minutos (ej: 60): "))
-            ejemplo_monitoreo_continuo(tickers, intervalo)
-        
-        elif opcion == "4":
-            confirmar = input("⚠️ Esto puede tomar varios minutos. ¿Continuar? (s/n): ")
-            if confirmar.lower() == 's':
-                ejemplo_procesar_todos()
-        
-        elif opcion == "5":
-            print("\n" + "=" * 80)
-            print("CONFIGURACIÓN ACTUAL")
-            print("=" * 80)
-            fechas = TradingConfig.get_fechas()
-            print(f"\nTickers: {', '.join(TradingConfig.ACTIVOS)}")
-            print(f"Intervalo: {TradingConfig.INTERVALO}")
-            print(f"Horizontes: {TradingConfig.HORIZONTES} horas")
-            print(f"Período entrenamiento: {TradingConfig.DIAS_ENTRENAMIENTO} días")
-            print(f"Período backtest: {TradingConfig.DIAS_BACKTEST} días")
-            print(f"Umbral confianza: {TradingConfig.UMBRAL_CONFIANZA_MIN:.0%}")
-            print(f"Ratio R:R mínimo: {TradingConfig.RATIO_MINIMO_RR}")
-        
-        elif opcion == "0":
-            print("\n👋 ¡Hasta luego!")
-            break
-        
-        else:
-            print("\n❌ Opción inválida")
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Operación cancelada")
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            logger.error("Error en menú", exc_info=True)
 
 
 # ============================================
@@ -391,25 +355,31 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         menu_principal()
     
-    # Si se pasa un ticker como argumento, hacer análisis rápido
-    elif len(sys.argv) == 2:
-        ticker = sys.argv[1].upper()
-        print(f"\n🚀 Análisis rápido de {ticker}")
-        ejemplo_analisis_rapido(ticker)
+    # Argumentos de línea de comandos
+    elif sys.argv[1] == "--full":
+        ejemplo_1_ejecutar_todo()
     
-    # Modo batch
-    elif sys.argv[1] == "--batch":
-        ejemplo_procesar_todos()
+    elif sys.argv[1] == "--conservative":
+        ejemplo_2_config_personalizada()
     
-    # Modo monitor
+    elif sys.argv[1] == "--ticker":
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "BTC-USD"
+        ejemplo_3_ticker_individual(ticker)
+    
     elif sys.argv[1] == "--monitor":
-        tickers = sys.argv[2].split(",") if len(sys.argv) > 2 else ["BTC-USD", "ETH-USD"]
-        intervalo = int(sys.argv[3]) if len(sys.argv) > 3 else 60
-        ejemplo_monitoreo_continuo(tickers, intervalo)
+        intervalo = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+        ejemplo_4_monitoreo_continuo(intervalo)
+    
+    elif sys.argv[1] == "--help":
+        print("""
+Uso:
+  python ejemplo_uso_v3.py                    # Menú interactivo
+  python ejemplo_uso_v3.py --full             # Sistema completo
+  python ejemplo_uso_v3.py --conservative     # Config conservadora
+  python ejemplo_uso_v3.py --ticker BTC-USD   # Analizar ticker
+  python ejemplo_uso_v3.py --monitor 60       # Monitoreo cada 60 min
+        """)
     
     else:
-        print("Uso:")
-        print("  python ejemplo_uso.py                    # Menú interactivo")
-        print("  python ejemplo_uso.py BTC-USD            # Análisis rápido")
-        print("  python ejemplo_uso.py --batch            # Procesar todos")
-        print("  python ejemplo_uso.py --monitor BTC-USD,ETH-USD 60  # Monitoreo continuo")
+        print(f"❌ Opción desconocida: {sys.argv[1]}")
+        print("Usa --help para ver opciones disponibles")
