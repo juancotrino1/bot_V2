@@ -62,7 +62,7 @@ class TradingConfig:
     
     # Activos
     ACTIVOS = [
-        "BTC-USD"
+        "BTC-USD","ETH-USD","SOL-USD","DOGE-USD","SUI20947-USD","BNB-USD","TRX-USD","LINK-USD","AAVE-USD","XRP-USD"
     ]
     
     # Parámetros técnicos
@@ -771,10 +771,18 @@ class SistemaTradingTicker:
         
         return viable, criterios_cumplidos
     
-    def analizar_tiempo_real(self):
+        def analizar_tiempo_real(self):
         if not self.modelos:
             return None
 
+        # ❌ SL y TP inválidos o demasiado cercanos
+        if abs(señal_actual['take_profit'] - señal_actual['precio']) < señal_actual['precio'] * 0.001:
+            return
+
+        if abs(señal_actual['stop_loss'] - señal_actual['precio']) < señal_actual['precio'] * 0.001:
+            return
+
+        
         try:
             df_reciente = yf.download(
                 self.ticker,
@@ -864,11 +872,12 @@ class SistemaTradingTicker:
                 'tendencia': 'ALCISTA' if ultima_vela.get('tendencia', 0) == 1 else 'BAJISTA',
                 'z_mr': float(z_actual),
                 'evento_mr': evento,
-             }
-    
+            }
+
         except Exception as e:
             print(f"  ❌ Error análisis tiempo real: {e}")
             return None
+
     
     def guardar_modelos(self):
         """Guarda modelos entrenados"""
@@ -891,6 +900,8 @@ class SistemaTradingTicker:
 # ============================================
 
 def main():
+    enviar_telegram("🧪 BOT ARRANCÓ EN GITHUB ACTIONS")
+    print("=" * 80)
 
     print("🚀 SISTEMA DE TRADING MEJORADO")
     print("=" * 80)
@@ -934,54 +945,59 @@ def main():
         
         # 5. Análisis tiempo real (solo si es viable)
         señal_actual = None
-        
+
         if viable:
-           señal_actual = sistema.analizar_tiempo_real()
+            try:
+                señal_actual = sistema.analizar_tiempo_real()
 
-           if (señal_actual and
-               señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN and
-               señal_actual['probabilidad'] >= TradingConfig.UMBRAL_PROBABILIDAD_MIN):
+                if (
+                    señal_actual
+                    and señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN
+                    and señal_actual['probabilidad'] >= TradingConfig.UMBRAL_PROBABILIDAD_MIN
+                ):
 
- 
+                    print(f"\n  🚨 SEÑAL DETECTADA:")
+                    print(f"    Dirección: {señal_actual['señal']}")
+                    print(f"    Probabilidad: {señal_actual['probabilidad']:.2%}")
+                    print(f"    Confianza: {señal_actual['confianza']:.2%}")
+                    print(f"    Precio: ${señal_actual['precio']:,.2f}")
+                    print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
+                    print(f"    TP: ${señal_actual['take_profit']:,.2f}")
+                    print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
 
-               print(f"\n  🚨 SEÑAL DETECTADA:")
-               print(f"    Dirección: {señal_actual['señal']}")
-               print(f"    Probabilidad: {señal_actual['probabilidad']:.2%}")
-               print(f"    Confianza: {señal_actual['confianza']:.2%}")
-               print(f"    Precio: ${señal_actual['precio']:,.2f}")
-               print(f"    SL: ${señal_actual['stop_loss']:,.2f}")
-               print(f"    TP: ${señal_actual['take_profit']:,.2f}")
-               print(f"    R:R: {señal_actual['ratio_rr']:.2f}")
+                    # 🔁 Control de repetición
+                    ultima = cargar_ultima_senal()
+                    if ultima and ultima["ticker"] == ticker and ultima["señal"] == señal_actual["señal"]:
+                        print("🔁 Señal repetida. No se envía.")
+                    else:
+                        fecha = señal_actual['fecha'].strftime("%Y-%m-%d %H:%M")
 
-               # 🔁 Control de repetición
-               ultima = cargar_ultima_senal()
-               if ultima and ultima["ticker"] == ticker and ultima["señal"] == señal_actual["señal"]:
-                   print("🔁 Señal repetida. No se envía.")
-               else:
-                   fecha = señal_actual['fecha'].strftime("%Y-%m-%d %H:%M")
+                        enviar_telegram(
+                            f"📊 SEÑAL {ticker}\n"
+                            f"🕒 Fecha: {fecha}\n"
+                            f"⏱ TF: {TradingConfig.INTERVALO}\n"
+                            f"📈 Tendencia: {señal_actual['tendencia']}\n"
+                            f"📊 RSI: {señal_actual['rsi']:.1f}\n\n"
+                            f"Dirección: {señal_actual['señal']}\n"
+                            f"Probabilidad: {señal_actual['probabilidad']:.2%}\n"
+                            f"Confianza: {señal_actual['confianza']:.2%}\n\n"
+                            f"🎯 Entrada: {señal_actual['precio']:.2f}\n"
+                            f"🛑 SL: {señal_actual['stop_loss']:.2f}\n"
+                            f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
+                            f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}\n"
+                            f"📐 Mean Reversion: {señal_actual['evento_mr']}\n"
+                            f"📐 Z-score: {señal_actual['z_mr']:.2f}\n\n"
+                        )
 
-                   enviar_telegram(
-                       f"📊 SEÑAL {ticker}\n"
-                       f"🕒 Fecha: {fecha}\n"
-                       f"⏱ TF: {TradingConfig.INTERVALO}\n"
-                       f"📈 Tendencia: {señal_actual['tendencia']}\n"
-                       f"📊 RSI: {señal_actual['rsi']:.1f}\n\n"
-                       f"Dirección: {señal_actual['señal']}\n"
-                       f"Probabilidad: {señal_actual['probabilidad']:.2%}\n"
-                       f"Confianza: {señal_actual['confianza']:.2%}\n\n"
-                       f"🎯 Entrada: {señal_actual['precio']:.2f}\n"
-                       f"🛑 SL: {señal_actual['stop_loss']:.2f}\n"
-                       f"🎯 TP: {señal_actual['take_profit']:.2f}\n"
-                       f"⚖️ R:R: {señal_actual['ratio_rr']:.2f}\n"
-                       f"📐 Mean Reversion: {señal_actual['evento_mr']}\n"
-                       f"📐 Z-score: {señal_actual['z_mr']:.2f}\n\n"
-                   )
+                        guardar_ultima_senal({
+                            "ticker": ticker,
+                            "señal": señal_actual["señal"],
+                            "fecha": str(señal_actual["fecha"])
+                        })
 
-                   guardar_ultima_senal({
-                       "ticker": ticker,
-                       "señal": señal_actual["señal"],
-                       "fecha": str(señal_actual["fecha"])
-                   })
+            except Exception as e:
+                print(f"❌ Error en análisis tiempo real: {e}")
+
 
         # 6. Guardar modelos
         if viable:
