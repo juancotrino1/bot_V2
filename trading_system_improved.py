@@ -865,8 +865,8 @@ class SistemaTradingTicker:
                 'z_mr': float(z_actual),
                 'evento_mr': evento,
              }
-
-         except Exception as e:
+    
+        except Exception as e:
             print(f"  ❌ Error análisis tiempo real: {e}")
             return None
     
