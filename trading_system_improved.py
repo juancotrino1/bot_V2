@@ -867,8 +867,8 @@ class SistemaTradingTicker:
              }
 
          except Exception as e:
-             print(f"  ❌ Error análisis tiempo real: {e}")
-             return None
+            print(f"  ❌ Error análisis tiempo real: {e}")
+            return None
     
     def guardar_modelos(self):
         """Guarda modelos entrenados"""
