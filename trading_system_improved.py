@@ -936,7 +936,7 @@ def main():
            señal_actual = sistema.analizar_tiempo_real()
 
            if (señal_actual and
-               señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN 
+               señal_actual['confianza'] >= TradingConfig.UMBRAL_CONFIANZA_MIN): 
 
                print(f"\n  🚨 SEÑAL DETECTADA:")
                print(f"    Dirección: {señal_actual['señal']}")
