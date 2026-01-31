@@ -1,4 +1,4 @@
-import yfinance as yf
+import ccxt
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -6,6 +6,8 @@ import pytz
 import os
 import requests
 import warnings
+import time
+import pickle
 from sklearn.preprocessing import RobustScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import TimeSeriesSplit
@@ -45,6 +47,307 @@ def enviar_telegram(mensaje):
 warnings.filterwarnings('ignore')
 
 # ============================================
+# PROVEEDOR DE DATOS CCXT
+# ============================================
+
+class CCXTDataProvider:
+    """Proveedor de datos usando CCXT - Descarga desde exchanges reales"""
+    
+    def __init__(self, exchange_name='binance'):
+        """
+        Inicializa conexión con el exchange
+        
+        Exchanges recomendados:
+        - binance (más líquido, recomendado)
+        - coinbase
+        - kraken
+        - bybit
+        """
+        try:
+            self.exchange = getattr(ccxt, exchange_name)({
+                'enableRateLimit': True,  # Respetar límites de API
+                'options': {
+                    'defaultType': 'spot',  # Trading spot (no futuros)
+                }
+            })
+            self.exchange_name = exchange_name
+            
+            print(f"✅ Conectado a {self.exchange.name}")
+            
+        except Exception as e:
+            print(f"❌ Error conectando a {exchange_name}: {e}")
+            raise
+        
+        # Mapeo de símbolos Yahoo Finance -> Exchange
+        self.symbol_mapping = {
+            'BTC-USD': 'BTC/USDT',
+            'ETH-USD': 'ETH/USDT',
+            'SOL-USD': 'SOL/USDT',
+            'BNB-USD': 'BNB/USDT',
+            'DOGE-USD': 'DOGE/USDT',
+            'ADA-USD': 'ADA/USDT',
+            'LINK-USD': 'LINK/USDT',
+            'SUI20947-USD': 'SUI/USDT',
+            'AAVE-USD': 'AAVE/USDT',
+            'NEAR-USD': 'NEAR/USDT',
+        }
+        
+        # Mapeo de intervalos
+        self.timeframe_mapping = {
+            '1m': '1m',
+            '5m': '5m',
+            '15m': '15m',
+            '30m': '30m',
+            '1h': '1h',
+            '4h': '4h',
+            '1d': '1d',
+            '1w': '1w'
+        }
+    
+    def descargar_datos(self, ticker, intervalo='4h', dias=1095):
+        """
+        Descarga datos históricos del exchange
+        
+        Args:
+            ticker: Símbolo (ej: 'BTC-USD')
+            intervalo: Timeframe ('1h', '4h', '1d')
+            dias: Días de historia a descargar
+        
+        Returns:
+            DataFrame con OHLCV o None si falla
+        """
+        
+        print(f"\n{'='*80}")
+        print(f"📥 DESCARGANDO {ticker} desde {self.exchange.name.upper()}")
+        print(f"{'='*80}")
+        
+        # Convertir símbolo
+        symbol = self.symbol_mapping.get(ticker)
+        if not symbol:
+            print(f"  ❌ Ticker {ticker} no soportado")
+            print(f"  💡 Tickers disponibles: {list(self.symbol_mapping.keys())}")
+            return None
+        
+        # Convertir intervalo
+        timeframe = self.timeframe_mapping.get(intervalo)
+        if not timeframe:
+            print(f"  ❌ Intervalo {intervalo} no soportado")
+            return None
+        
+        try:
+            # Verificar que el exchange soporta este par
+            self.exchange.load_markets()
+            if symbol not in self.exchange.markets:
+                print(f"  ❌ {symbol} no disponible en {self.exchange.name}")
+                return None
+            
+            # Calcular timestamp de inicio (en milisegundos)
+            since = self.exchange.milliseconds() - (dias * 24 * 60 * 60 * 1000)
+            
+            # CCXT descarga en lotes (máximo 1000-1500 velas por request)
+            all_ohlcv = []
+            current_since = since
+            limit = 1000  # Velas por request
+            
+            print(f"  🔄 Descargando datos históricos...")
+            print(f"  📅 Objetivo: {dias} días ({intervalo})")
+            
+            iteration = 0
+            max_iterations = 100  # Protección contra loops infinitos
+            
+            while iteration < max_iterations:
+                iteration += 1
+                
+                try:
+                    # Descargar lote
+                    ohlcv = self.exchange.fetch_ohlcv(
+                        symbol,
+                        timeframe=timeframe,
+                        since=current_since,
+                        limit=limit
+                    )
+                    
+                    if not ohlcv:
+                        print(f"  ⚠️ No hay más datos disponibles")
+                        break
+                    
+                    # Evitar duplicados
+                    if all_ohlcv and ohlcv[0][0] <= all_ohlcv[-1][0]:
+                        print(f"  ✅ Descarga completa (sin nuevos datos)")
+                        break
+                    
+                    all_ohlcv.extend(ohlcv)
+                    
+                    # Mostrar progreso
+                    fecha_ultima = datetime.fromtimestamp(ohlcv[-1][0] / 1000)
+                    print(f"    📊 Lote {iteration}: hasta {fecha_ultima.strftime('%Y-%m-%d %H:%M')} "
+                          f"({len(all_ohlcv):,} velas acumuladas)")
+                    
+                    # Si llegamos al presente, terminar
+                    if fecha_ultima >= datetime.now() - timedelta(hours=24):
+                        print(f"  ✅ Alcanzado el presente")
+                        break
+                    
+                    # Actualizar timestamp para siguiente lote
+                    current_since = ohlcv[-1][0] + 1
+                    
+                    # Pausa para respetar rate limit
+                    if self.exchange.rateLimit:
+                        time.sleep(self.exchange.rateLimit / 1000)
+                    
+                except ccxt.RateLimitExceeded:
+                    print(f"  ⚠️ Rate limit alcanzado, esperando 60s...")
+                    time.sleep(60)
+                    continue
+                    
+                except Exception as e:
+                    print(f"  ⚠️ Error en lote {iteration}: {e}")
+                    break
+            
+            if not all_ohlcv:
+                print(f"  ❌ No se pudieron descargar datos")
+                return None
+            
+            # Convertir a DataFrame
+            df = pd.DataFrame(
+                all_ohlcv,
+                columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']
+            )
+            
+            # Convertir timestamp a datetime
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Convertir a timezone configurado
+            df.index = df.index.tz_localize('UTC').tz_convert('America/Bogota')
+            
+            # Limpiar duplicados y ordenar
+            df = df[~df.index.duplicated(keep='last')]
+            df = df.sort_index()
+            
+            # Asegurar tipos numéricos
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Eliminar NaN
+            df = df.dropna()
+            
+            print(f"\n  ✅ DESCARGA EXITOSA")
+            print(f"  📊 Total velas: {len(df):,}")
+            print(f"  📅 Rango: {df.index[0].date()} → {df.index[-1].date()}")
+            print(f"  💰 Precio actual: ${df['Close'].iloc[-1]:,.2f}")
+            print(f"  📈 Cambio periodo: {((df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1) * 100:+.2f}%")
+            
+            return df
+            
+        except ccxt.NetworkError as e:
+            print(f"  ❌ Error de red: {e}")
+            return None
+        except ccxt.ExchangeError as e:
+            print(f"  ❌ Error del exchange: {e}")
+            return None
+        except Exception as e:
+            print(f"  ❌ Error inesperado: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def obtener_precio_actual(self, ticker):
+        """Obtiene precio en tiempo real"""
+        symbol = self.symbol_mapping.get(ticker)
+        if not symbol:
+            return None
+        
+        try:
+            ticker_data = self.exchange.fetch_ticker(symbol)
+            return ticker_data['last']
+        except Exception as e:
+            print(f"❌ Error obteniendo precio de {ticker}: {e}")
+            return None
+
+
+# ============================================
+# SISTEMA DE CACHÉ
+# ============================================
+
+class CacheManager:
+    """Gestiona caché de datos descargados para evitar descargas repetidas"""
+    
+    def __init__(self, cache_dir="cache_datos_ccxt"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+    
+    def _get_cache_path(self, ticker, intervalo, exchange='binance'):
+        """Ruta del archivo de caché"""
+        filename = f"{exchange}_{ticker.replace('/', '-')}_{intervalo}.pkl"
+        return self.cache_dir / filename
+    
+    def cargar(self, ticker, intervalo, exchange='binance', max_age_hours=24):
+        """
+        Intenta cargar desde caché
+        
+        Args:
+            ticker: Símbolo
+            intervalo: Timeframe
+            exchange: Nombre del exchange
+            max_age_hours: Edad máxima del caché en horas
+        
+        Returns:
+            DataFrame o None
+        """
+        cache_path = self._get_cache_path(ticker, intervalo, exchange)
+        
+        if not cache_path.exists():
+            return None
+        
+        # Verificar antigüedad
+        edad_horas = (datetime.now() - datetime.fromtimestamp(
+            cache_path.stat().st_mtime
+        )).total_seconds() / 3600
+        
+        if edad_horas > max_age_hours:
+            print(f"  ⚠️ Caché expirado ({edad_horas:.1f} horas)")
+            return None
+        
+        try:
+            with open(cache_path, 'rb') as f:
+                df = pickle.load(f)
+            
+            print(f"  💾 Cargado desde caché ({len(df):,} velas, {edad_horas:.1f}h antigüedad)")
+            return df
+        
+        except Exception as e:
+            print(f"  ⚠️ Error leyendo caché: {e}")
+            return None
+    
+    def guardar(self, ticker, intervalo, df, exchange='binance'):
+        """Guarda DataFrame en caché"""
+        cache_path = self._get_cache_path(ticker, intervalo, exchange)
+        
+        try:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(df, f)
+            
+            print(f"  💾 Guardado en caché: {cache_path.name}")
+        
+        except Exception as e:
+            print(f"  ⚠️ Error guardando caché: {e}")
+    
+    def limpiar_cache_antiguo(self, dias=7):
+        """Elimina archivos de caché más antiguos que X días"""
+        limite = datetime.now() - timedelta(days=dias)
+        
+        eliminados = 0
+        for archivo in self.cache_dir.glob("*.pkl"):
+            if datetime.fromtimestamp(archivo.stat().st_mtime) < limite:
+                archivo.unlink()
+                eliminados += 1
+        
+        if eliminados > 0:
+            print(f"🗑️ Limpiados {eliminados} archivos de caché antiguos")
+
+
+# ============================================
 # CONFIGURACIÓN MEJORADA
 # ============================================
 
@@ -54,26 +357,32 @@ class TradingConfig:
     # Timezone
     TIMEZONE = pytz.timezone('America/Bogota')
     
-    # Períodos de tiempo (CORREGIDO)
-    INTERVALO = "1h"
-    DIAS_ENTRENAMIENTO = 365  # 1 año de datos históricos
-    DIAS_VALIDACION = 90      # 3 meses para validación
-    DIAS_BACKTEST = 30        # 1 mes para backtesting final
+    # === FUENTE DE DATOS (NUEVO) ===
+    DATA_SOURCE = 'ccxt'           # Usar CCXT
+    EXCHANGE = 'binance'           # Exchange a usar
+    USE_CACHE = True               # Usar sistema de caché
+    CACHE_MAX_AGE_HOURS = 12       # Caché válido por 12 horas
+    
+    # Períodos de tiempo - OPTIMIZADO PARA CCXT
+    INTERVALO = "4h"               # 4 horas (buen balance)
+    DIAS_ENTRENAMIENTO = 1460      # 4 años (CCXT permite mucho más!)
+    DIAS_VALIDACION = 180          # 6 meses
+    DIAS_BACKTEST = 90             # 3 meses
     
     # Activos
     ACTIVOS = [
-        "BTC-USD","ETH-USD","SOL-USD","BNB-USD","DOGE-USD","ADA-USD","LINK-USD","SUI20947-USD","AAVE-USD","NEAR-USD"
+        "BTC-USD","ETH-USD","SOL-USD","BNB-USD","DOGE-USD","ADA-USD","LINK-USD","AAVE-USD","NEAR-USD"
     ]
     
-    # Parámetros técnicos
-    VENTANA_VOLATILIDAD = 24  # 24 horas
-    VENTANA_TENDENCIA = 50
-    VENTANA_RAPIDA = 12
+    # Parámetros técnicos (ajustados para 4h)
+    VENTANA_VOLATILIDAD = 6        # 6 velas de 4h = 24 horas
+    VENTANA_TENDENCIA = 50         # ~8 días
+    VENTANA_RAPIDA = 12            # ~2 días
     ATR_PERIODO = 14
     RSI_PERIODO = 14
     
-    # Horizontes de predicción (CORREGIDO - más cortos)
-    HORIZONTES = [4, 8, 12, 24, 48]  # En horas
+    # Horizontes de predicción (en velas de 4h)
+    HORIZONTES = [1, 2, 3, 6, 12]  # = 4h, 8h, 12h, 24h, 48h
     
     # Gestión de riesgo
     MULTIPLICADOR_SL = 2.0
@@ -83,8 +392,8 @@ class TradingConfig:
     
     # Validación
     N_FOLDS_WF = 3
-    MIN_MUESTRAS_ENTRENAMIENTO = 500
-    MIN_MUESTRAS_CLASE = 20
+    MIN_MUESTRAS_ENTRENAMIENTO = 1000   # Más estricto con más datos
+    MIN_MUESTRAS_CLASE = 50             # Más balance requerido
     
     # Umbrales de trading
     UMBRAL_PROBABILIDAD_MIN = 0.65
@@ -92,6 +401,7 @@ class TradingConfig:
     
     # Persistencia
     MODELOS_DIR = Path("modelos_trading")
+    CACHE_DIR = Path("cache_datos_ccxt")
     
     @classmethod
     def get_fechas(cls):
@@ -103,10 +413,36 @@ class TradingConfig:
             'inicio_validacion': now - timedelta(days=cls.DIAS_VALIDACION + cls.DIAS_BACKTEST),
             'inicio_backtest': now - timedelta(days=cls.DIAS_BACKTEST)
         }
+    
+    @classmethod
+    def validar_configuracion(cls):
+        """Valida que la configuración sea coherente"""
+        fechas = cls.get_fechas()
+        dias_totales = (fechas['actual'] - fechas['inicio_entrenamiento']).days
+        
+        # Calcular velas esperadas
+        velas_por_dia = {'1h': 24, '4h': 6, '1d': 1, '12h': 2}
+        velas_esperadas = dias_totales * velas_por_dia.get(cls.INTERVALO, 24)
+        
+        print(f"\n📊 VALIDACIÓN DE CONFIGURACIÓN")
+        print(f"{'='*70}")
+        print(f"Fuente de datos: {cls.DATA_SOURCE.upper()} ({cls.EXCHANGE})")
+        print(f"Intervalo: {cls.INTERVALO}")
+        print(f"Días totales: {dias_totales} (~{dias_totales/365:.1f} años)")
+        print(f"Velas esperadas: {velas_esperadas:,}")
+        print(f"Mínimo requerido: {cls.MIN_MUESTRAS_ENTRENAMIENTO:,}")
+        print(f"Horizontes: {cls.HORIZONTES} velas = {[h*4 for h in cls.HORIZONTES]} horas")
+        
+        if velas_esperadas < cls.MIN_MUESTRAS_ENTRENAMIENTO:
+            print(f"⚠️ ADVERTENCIA: Pocas velas para entrenamiento")
+        else:
+            print(f"✅ Configuración válida")
+        
+        print(f"{'='*70}\n")
 
 
 # ============================================
-# CÁLCULO DE INDICADORES (MEJORADO)
+# CÁLCULO DE INDICADORES (SIN CAMBIOS)
 # ============================================
 
 class IndicadoresTecnicos:
@@ -225,7 +561,7 @@ class IndicadoresTecnicos:
 
 
 # ============================================
-# ETIQUETADO DE DATOS (CORREGIDO)
+# ETIQUETADO DE DATOS (SIN CAMBIOS)
 # ============================================
 
 class EtiquetadoDatos:
@@ -281,7 +617,7 @@ class EtiquetadoDatos:
 
 
 # ============================================
-# MODELO DE MACHINE LEARNING (MEJORADO)
+# MODELO DE MACHINE LEARNING (SIN CAMBIOS)
 # ============================================
 
 class ModeloPrediccion:
@@ -432,7 +768,7 @@ class ModeloPrediccion:
 
 
 # ============================================
-# BACKTESTING (MEJORADO)
+# BACKTESTING (SIN CAMBIOS)
 # ============================================
 
 class Backtester:
@@ -620,54 +956,67 @@ class Backtester:
 
 
 # ============================================
-# SISTEMA COMPLETO POR TICKER
+# SISTEMA COMPLETO POR TICKER (MODIFICADO PARA CCXT)
 # ============================================
 
 class SistemaTradingTicker:
     """Sistema completo de trading para un ticker"""
     
-    def __init__(self, ticker):
+    def __init__(self, ticker, data_provider=None, cache_manager=None):
         self.ticker = ticker
         self.modelos = {}
         self.fechas = TradingConfig.get_fechas()
         self.df_historico = None
         self.metricas_backtest = None
+        
+        # NUEVO: Proveedor de datos y caché
+        self.data_provider = data_provider or CCXTDataProvider(TradingConfig.EXCHANGE)
+        self.cache = cache_manager or CacheManager(TradingConfig.CACHE_DIR)
     
     def descargar_datos(self):
-        """Descarga datos históricos"""
-        print(f"\n{'='*80}")
-        print(f"📥 DESCARGANDO {self.ticker}")
-        print(f"{'='*80}")
+        """Descarga datos históricos usando CCXT con caché"""
         
-        try:
-            df = yf.download(
+        # Calcular días totales necesarios
+        dias_totales = (
+            TradingConfig.DIAS_ENTRENAMIENTO +
+            TradingConfig.DIAS_VALIDACION +
+            TradingConfig.DIAS_BACKTEST
+        )
+        
+        # Intentar caché primero si está habilitado
+        if TradingConfig.USE_CACHE:
+            df = self.cache.cargar(
                 self.ticker,
-                start=self.fechas['inicio_entrenamiento'],
-                end=self.fechas['actual'],
-                interval=TradingConfig.INTERVALO,
-                progress=False
+                TradingConfig.INTERVALO,
+                TradingConfig.EXCHANGE,
+                TradingConfig.CACHE_MAX_AGE_HOURS
             )
             
-            if df.empty:
-                print(f"  ❌ No hay datos disponibles")
-                return False
-            
-            # Limpiar MultiIndex
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            
-            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-            df = df.dropna()
-            
-            self.df_historico = df
-            print(f"  ✅ Descargado: {len(df)} velas")
-            print(f"  📅 Rango: {df.index[0]} a {df.index[-1]}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
+            if df is not None and len(df) >= TradingConfig.MIN_MUESTRAS_ENTRENAMIENTO:
+                self.df_historico = df
+                return True
+        
+        # Descargar desde exchange
+        df = self.data_provider.descargar_datos(
+            ticker=self.ticker,
+            intervalo=TradingConfig.INTERVALO,
+            dias=dias_totales
+        )
+        
+        if df is None or df.empty:
             return False
+        
+        # Guardar en caché
+        if TradingConfig.USE_CACHE:
+            self.cache.guardar(
+                self.ticker,
+                TradingConfig.INTERVALO,
+                df,
+                TradingConfig.EXCHANGE
+            )
+        
+        self.df_historico = df
+        return True
     
     def entrenar_modelos(self):
         """Entrena modelos para todos los horizontes"""
@@ -772,25 +1121,22 @@ class SistemaTradingTicker:
         return viable, criterios_cumplidos
     
     def analizar_tiempo_real(self):
+        """Análisis en tiempo real usando CCXT"""
         if not self.modelos:
             return None
 
         try:
-            df_reciente = yf.download(
-                self.ticker,
-                start=self.fechas['actual'] - timedelta(days=7),
-                end=self.fechas['actual'],
-                interval=TradingConfig.INTERVALO,
-                progress=False
+            # Descargar datos recientes usando CCXT
+            df_reciente = self.data_provider.descargar_datos(
+                ticker=self.ticker,
+                intervalo=TradingConfig.INTERVALO,
+                dias=7
             )
 
-            if df_reciente.empty:
+            if df_reciente is None or df_reciente.empty:
                 return None
 
-            if isinstance(df_reciente.columns, pd.MultiIndex):
-                df_reciente.columns = df_reciente.columns.get_level_values(0)
-
-            df_reciente = df_reciente[['Open', 'High', 'Low', 'Close', 'Volume']]
+            # Calcular features
             df_reciente = IndicadoresTecnicos.calcular_features(df_reciente)
 
             # === MEAN REVERSION ===
@@ -868,6 +1214,8 @@ class SistemaTradingTicker:
     
         except Exception as e:
             print(f"  ❌ Error análisis tiempo real: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def guardar_modelos(self):
@@ -875,7 +1223,7 @@ class SistemaTradingTicker:
         if not self.modelos:
             return False
         
-        path_ticker = TradingConfig.MODELOS_DIR / self.ticker
+        path_ticker = TradingConfig.MODELOS_DIR / self.ticker.replace('/', '-')
         path_ticker.mkdir(parents=True, exist_ok=True)
         
         for horizonte, modelo in self.modelos.items():
@@ -892,8 +1240,18 @@ class SistemaTradingTicker:
 
 def main():
 
-    print("🚀 SISTEMA DE TRADING MEJORADO")
+    print("🚀 SISTEMA DE TRADING MEJORADO - CCXT")
     print("=" * 80)
+    
+    # Validar configuración
+    TradingConfig.validar_configuracion()
+    
+    # Inicializar proveedores globales
+    data_provider = CCXTDataProvider(TradingConfig.EXCHANGE)
+    cache_manager = CacheManager(TradingConfig.CACHE_DIR)
+    
+    # Limpiar caché antiguo
+    cache_manager.limpiar_cache_antiguo(dias=7)
     
     fechas = TradingConfig.get_fechas()
     print(f"\n📅 Configuración temporal:")
@@ -901,13 +1259,13 @@ def main():
     print(f"  Entrenamiento desde: {fechas['inicio_entrenamiento'].date()}")
     print(f"  Backtest desde: {fechas['inicio_backtest'].date()}")
     print(f"  Intervalo: {TradingConfig.INTERVALO}")
-    print(f"  Horizontes: {TradingConfig.HORIZONTES} horas")
+    print(f"  Horizontes: {TradingConfig.HORIZONTES} velas")
     
     resultados_globales = {}
     
     # Procesar cada ticker
     for ticker in TradingConfig.ACTIVOS:
-        sistema = SistemaTradingTicker(ticker)
+        sistema = SistemaTradingTicker(ticker, data_provider, cache_manager)
         
         # 1. Descargar datos
         if not sistema.descargar_datos():
