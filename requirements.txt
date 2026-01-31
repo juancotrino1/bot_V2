@@ -16,7 +16,7 @@ requests>=2.31.0               # Para Telegram
 pytz>=2023.3                   # Timezones
 
 # === OPCIONAL (mantener yfinance como backup) ===
-# yfinance>=0.2.0              # Descomentar si quieres mantener como fallback
+yfinance>=0.2.0              # Descomentar si quieres mantener como fallback
 
 # === NOTAS DE INSTALACIÓN ===
 # 
