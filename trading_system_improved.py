@@ -67,7 +67,7 @@ class TradingConfig:
     
     # Parámetros técnicos
     VENTANA_VOLATILIDAD = 24  # 24 horas
-    VENTANA_TENDENCIA = 50
+    VENTANA_TENDENCIA = 40
     VENTANA_RAPIDA = 12
     ATR_PERIODO = 14
     RSI_PERIODO = 14
@@ -76,9 +76,9 @@ class TradingConfig:
     HORIZONTES = [4, 8, 12, 24, 48]  # En horas
     
     # Gestión de riesgo
-    MULTIPLICADOR_SL = 2.0
-    MULTIPLICADOR_TP = 3.0
-    RATIO_MINIMO_RR = 1.5
+    MULTIPLICADOR_SL = 2.5
+    MULTIPLICADOR_TP = 4.0
+    RATIO_MINIMO_RR = 1.65
     MAX_RIESGO_POR_OPERACION = 0.02  # 2% del capital
     
     # Validación
@@ -87,8 +87,8 @@ class TradingConfig:
     MIN_MUESTRAS_CLASE = 20
     
     # Umbrales de trading
-    UMBRAL_PROBABILIDAD_MIN = 0.65
-    UMBRAL_CONFIANZA_MIN = 0.60
+    UMBRAL_PROBABILIDAD_MIN = 0.70
+    UMBRAL_CONFIANZA_MIN = 0.65
     
     # Persistencia
     MODELOS_DIR = Path("modelos_trading")
