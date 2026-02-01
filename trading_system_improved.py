@@ -78,7 +78,7 @@ class TradingConfig:
     # Gestión de riesgo
     MULTIPLICADOR_SL = 2.5
     MULTIPLICADOR_TP = 4.0
-    RATIO_MINIMO_RR = 1.5
+    RATIO_MINIMO_RR = 1.6
     MAX_RIESGO_POR_OPERACION = 0.02  # 2% del capital
     
     # Validación
@@ -605,18 +605,18 @@ class Backtester:
             'mejor_operacion': retornos.max(),
             'peor_operacion': retornos.min(),
             'profit_factor': abs(retornos[retornos > 0].sum() / retornos[retornos < 0].sum()) if (retornos < 0).any() else np.inf,
-            'max_drawdown': self._calcular_max_drawdown(retornos),
+            'max_': self._calcular_max_(retornos),
             'sharpe_ratio': retornos.mean() / retornos.std() if retornos.std() > 0 else 0,
         }
         
         return metricas, df_ops
     
-    def _calcular_max_drawdown(self, retornos):
-        """Calcula drawdown máximo"""
+    def _calcular_max_(self, retornos):
+        """Calcula  máximo"""
         equity_curve = (1 + retornos).cumprod()
         running_max = equity_curve.expanding().max()
-        drawdown = (equity_curve - running_max) / running_max
-        return drawdown.min()
+         = (equity_curve - running_max) / running_max
+        return .min()
 
 
 # ============================================
@@ -735,7 +735,7 @@ class SistemaTradingTicker:
         print(f"    Retorno total: {metricas['retorno_total']:.2%}")
         print(f"    Retorno promedio: {metricas['retorno_promedio']:.2%}")
         print(f"    Profit Factor: {metricas['profit_factor']:.2f}")
-        print(f"    Max Drawdown: {metricas['max_drawdown']:.2%}")
+        print(f"    Max : {metricas['max_']:.2%}")
         print(f"    Sharpe Ratio: {metricas['sharpe_ratio']:.2f}")
         
         return True
@@ -752,10 +752,10 @@ class SistemaTradingTicker:
         criterios.append(m['tasa_exito'] > 0.50)
         
         # Criterio 2: Retorno total positivo
-        criterios.append(m['retorno_total'] > 0)
+        criterios.append(m['retorno_total'] > 0.1)
         
         # Criterio 3: Profit factor > 1.2
-        criterios.append(m['profit_factor'] > 1.2)
+        criterios.append(m['profit_factor'] > 1.6)
         
         # Criterio 4: Drawdown controlado
         criterios.append(abs(m['max_drawdown']) < 0.25)
@@ -764,7 +764,7 @@ class SistemaTradingTicker:
         criterios.append(m['n_operaciones'] >= 15)
         
         # Criterio 6: Sharpe ratio positivo
-        criterios.append(m['sharpe_ratio'] > 0)
+        criterios.append(m['sharpe_ratio'] > 1.6)
         
         criterios_cumplidos = sum(criterios)
         viable = criterios_cumplidos >= 4
