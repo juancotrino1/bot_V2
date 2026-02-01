@@ -62,7 +62,7 @@ class TradingConfig:
     
     # Activos
     ACTIVOS = [
-        "BTC-USD","ETH-USD","SOL-USD","BNB-USD","DOGE-USD","ADA-USD","LINK-USD","SUI20947-USD","AAVE-USD","NEAR-USD"
+        "BTC-USD","ETH-USD","SOL-USD","BNB-USD","DOGE-USD","ADA-USD","LINK-USD","SUI20947-USD","AAVE-USD","NEAR-USD","LTC-USD","ZEC-USD","UNI7083-USD","XMR-USD","PENGU34466-USD","PENDLE-USD"
     ]
     
     # Parámetros técnicos
