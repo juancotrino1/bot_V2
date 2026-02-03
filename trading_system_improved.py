@@ -58,7 +58,7 @@ class TradingConfig:
     INTERVALO = "1h"
     DIAS_ENTRENAMIENTO = 365  # 1 año de datos históricos
     DIAS_VALIDACION = 90      # 3 meses para validación
-    DIAS_BACKTEST = 30        # 1 mes para backtesting final
+    DIAS_BACKTEST = 60        # 1 mes para backtesting final
     
     # Activos
     ACTIVOS = [
