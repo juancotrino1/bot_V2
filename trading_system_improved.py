@@ -538,7 +538,7 @@ class Backtester:
             # Promediar probabilidades
             probs_positivas = [p['probabilidad_positiva'] for p in predicciones.values()]
             prob_promedio = np.mean(probs_positivas)
-            confianza_promedio = np.mean([p['confianza'] for p in predicciones.values())
+            confianza_promedio = np.mean([p['confianza'] for p in predicciones.values()])
             
             # ✅ FILTRO DE CONFIANZA (umbral más bajo)
             if confianza_promedio < TradingConfig.UMBRAL_CONFIANZA_MIN:
