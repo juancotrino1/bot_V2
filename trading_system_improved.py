@@ -48,7 +48,7 @@ class TradingConfig:
     ATR_PERIODO = 14
     
     # Horizontes cortos
-    HORIZONTES = [1, 2, 3]
+    HORIZONTES = [1, 2, 4, 8]
     
     # Gestión de riesgo
     STOP_LOSS_PCT = 0.015
@@ -1182,14 +1182,12 @@ def main():
                     emoji = "📈" if señal_actual['señal'] == "LONG" else "📉"
                     mensaje = (
                         f"{emoji} {ticker} - {señal_actual['señal']} ({señal_actual['fuerza']})\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📊 Probabilidad: {señal_actual['probabilidad']:.1%}\n"
                         f"💰 Precio: ${señal_actual['precio']:,.2f}\n"
                         f"🛑 Stop Loss: ${señal_actual['stop_loss']:,.2f}\n"
                         f"🎯 Take Profit: ${señal_actual['take_profit']:,.2f}\n"
                         f"⚖️ Ratio R:R: {señal_actual['ratio_rr']:.2f}\n"
                         f"📈 RSI: {señal_actual['rsi']:.0f} ({señal_actual['estado_rsi']})\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"⏰ {señal_actual['fecha'].strftime('%Y-%m-%d %H:%M')}"
                     )
                     
