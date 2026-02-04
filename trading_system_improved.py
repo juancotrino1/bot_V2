@@ -42,11 +42,11 @@ class TradingConfig:
     ATR_PERIODO = 14
     
     # ✅ HORIZONTE CORTO (máximo 2 horas en crypto)
-    HORIZONTES = [1, 2]  # 1h y 2h
+    HORIZONTES = [1, 2,4,8,12]  # 1h y 2h
     
     # 🎯 GESTIÓN DE RIESGO REALISTA
-    STOP_LOSS_PCT = 0.025    # 2.5% (más espacio para ruido)
-    TAKE_PROFIT_PCT = 0.040  # 4.0% (ratio 1.6:1)
+    STOP_LOSS_PCT = 0.015    # 2.5% (más espacio para ruido)
+    TAKE_PROFIT_PCT = 0.03  # 4.0% (ratio 1.6:1)
     RATIO_MINIMO_RR = 1.5    # Más permisivo
     MAX_RIESGO_POR_OPERACION = 0.02  # 2% por operación
     
@@ -56,16 +56,16 @@ class TradingConfig:
     MIN_MUESTRAS_CLASE = 50
     
     # 🔥 UMBRALES REALISTAS
-    UMBRAL_PROBABILIDAD_MIN = 0.55  # 55% (antes 72%)
-    UMBRAL_CONFIANZA_MIN = 0.53     # 53% (antes 70%)
+    UMBRAL_PROBABILIDAD_MIN = 0.72  # 55% (antes 72%)
+    UMBRAL_CONFIANZA_MIN = 0.70     # 53% (antes 70%)
     
     # 🎯 UMBRAL DE MOVIMIENTO PARA ETIQUETAS
     UMBRAL_MOVIMIENTO = 0.012  # 1.2% (más estricto para reducir ruido)
     
     # ✅ SIN FILTROS RSI/Z-SCORE (confiar en el modelo)
     # Solo usar en casos extremos para evitar entrar en crashes
-    RSI_EXTREME_LOW = 15   # Solo bloquear SHORT si RSI < 15
-    RSI_EXTREME_HIGH = 85  # Solo bloquear LONG si RSI > 85
+    RSI_EXTREME_LOW = 25   # Solo bloquear SHORT si RSI < 15
+    RSI_EXTREME_HIGH = 75  # Solo bloquear LONG si RSI > 85
     
     MODELOS_DIR = Path("modelos_trading")
     
