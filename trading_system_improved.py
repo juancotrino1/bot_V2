@@ -912,8 +912,8 @@ class SistemaTradingTicker:
         
         criterios = []
         criterios.append(('Operaciones >= 5', m['n_operaciones'] >= 5))
-        criterios.append(('Win rate > 45%', m['tasa_exito'] > 0.45))
-        criterios.append(('Profit factor > 1.2', m['profit_factor'] > 1.2))
+        criterios.append(('Win rate > 45%', m['tasa_exito'] > 0.5))
+        criterios.append(('Profit factor > 1.2', m['profit_factor'] > 1.5))
         criterios.append(('Retorno total > 0%', m['retorno_total'] > 0))
         criterios.append(('Equity final > 1.0', m['equity_final'] > 1.0))
         criterios.append(('Max DD < 20%', abs(m['max_drawdown']) < 0.20))
