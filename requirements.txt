@@ -18,8 +18,10 @@ lightgbm>=4.0.0
 
 # === OPTIMIZACIÓN ===
 optuna>=3.3.0
-ta==0.11.0
-talib
+# ta-binary es compatible con todas las versiones de Python
+ta-binary>=0.10.0
+# Alternativa: usar TA-Lib wheel precompilado
+# talib-binary
 catboost
 vectorbt
 # === UTILIDADES ===
