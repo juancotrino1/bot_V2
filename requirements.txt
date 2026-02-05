@@ -18,7 +18,7 @@ lightgbm>=4.0.0
 
 # === OPTIMIZACIÓN ===
 optuna>=3.3.0
-ta
+ta==0.11.0
 talib
 catboost
 vectorbt
