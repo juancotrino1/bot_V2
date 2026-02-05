@@ -1,6 +1,6 @@
 """
-Trading Cuantitativo - Sistema Multi-Modelo
-Versión: 3.0 - GitHub Actions Optimizado
+Trading Cuantitativo - Sistema Robustecido
+Versión: 3.1 - Corregido para GitHub Actions
 """
 
 import yfinance as yf
@@ -13,108 +13,74 @@ import sys
 from pathlib import Path
 import json
 import logging
-from typing import Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+import talib
 from scipy import stats
-import ta  # Technical Analysis library
 import joblib
-from sklearn.preprocessing import RobustScaler, StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
-from sklearn.svm import SVC
-from sklearn.neural_network import MLPClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.pipeline import Pipeline
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from catboost import CatBoostClassifier
-import vectorbt as vbt  # Optimizado para backtesting rápido
 
-warnings.filterwarnings('ignore')
-
-# Configuración de logging para GitHub Actions
+# Configuración de logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
-@dataclass
+warnings.filterwarnings('ignore')
+
 class Config:
-    """Configuración optimizada para GitHub Actions"""
-    # Assets
-    SYMBOLS: List[str] = field(default_factory=lambda: [
-        "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD",
-        "XRP-USD", "ADA-USD", "AVAX-USD", "DOT-USD"
-    ])
+    """Configuración optimizada"""
+    # Assets principales de crypto
+    SYMBOLS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "ADA-USD", "XRP-USD"]
     
-    # Timeframes
-    INTERVAL: str = "1h"
-    TRAIN_DAYS: int = 180  # 6 meses para entrenamiento rápido
-    TEST_DAYS: int = 30    # 1 mes para test
+    # Timeframes (1h para mejor data)
+    INTERVAL = "1h"
+    TRAIN_DAYS = 180  # 6 meses
+    TEST_DAYS = 30    # 1 mes
     
-    # Modelos a usar
-    MODELS: List[str] = field(default_factory=lambda: [
-        "xgboost", "lightgbm", "random_forest", "gradient_boosting"
-    ])
+    # Trading parameters
+    COMMISSION = 0.001
+    STOP_LOSS_PCT = 0.02
+    TAKE_PROFIT_PCT = 0.04
     
-    # Hiperparámetros (reducidos para velocidad)
-    N_SPLITS: int = 3
-    CV_FOLDS: int = 2
-    
-    # Trading
-    COMMISSION: float = 0.001  # 0.1%
-    SLIPPAGE: float = 0.0005   # 0.05%
-    STOP_LOSS: float = 0.02    # 2%
-    TAKE_PROFIT: float = 0.04  # 4%
-    
-    # Señales
-    CONFIDENCE_THRESHOLD: float = 0.55
-    MIN_SIGNAL_STRENGTH: float = 0.6
-    
-    # GitHub Actions
-    MAX_SYMBOLS: int = 6  # Máximo de symbols a procesar
-    TIMEOUT_PER_SYMBOL: int = 300  # 5 minutos por symbol
-    
-class DataFetcher:
-    """Manejador de datos optimizado"""
+    # Model parameters
+    MIN_DATA_POINTS = 100
+    CONFIDENCE_THRESHOLD = 0.55
+
+class DataHandler:
+    """Manejo robusto de datos"""
     
     @staticmethod
-    def fetch_data(symbol: str, interval: str, days: int) -> Optional[pd.DataFrame]:
-        """Descarga datos con caché para GitHub Actions"""
+    def get_data(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
+        """Obtiene datos con validación"""
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             
-            # Convertir a string para yfinance
-            start_str = start_date.strftime('%Y-%m-%d')
-            end_str = end_date.strftime('%Y-%m-%d')
-            
-            logger.info(f"Descargando {symbol} ({interval}) desde {start_str}")
+            logger.info(f"Descargando {symbol} desde {start_date.date()}")
             
             df = yf.download(
                 symbol,
-                start=start_str,
-                end=end_str,
-                interval=interval,
+                start=start_date,
+                end=end_date,
+                interval=Config.INTERVAL,
                 progress=False,
-                threads=False
+                auto_adjust=True
             )
             
-            if df.empty:
-                logger.warning(f"No se obtuvieron datos para {symbol}")
+            if df.empty or len(df) < Config.MIN_DATA_POINTS:
+                logger.warning(f"Datos insuficientes para {symbol}")
                 return None
             
-            # Limpieza básica
-            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-            df.columns = ['open', 'high', 'low', 'close', 'volume']
-            df = df.dropna()
+            # Renombrar columnas
+            df.columns = ['open', 'high', 'low', 'close', 'adj_close', 'volume']
+            df = df[['open', 'high', 'low', 'close', 'volume']]
             
-            logger.info(f"✅ {symbol}: {len(df)} velas descargadas")
+            # Validar datos
+            if df.isnull().sum().sum() > 0:
+                df = df.ffill().bfill()
+            
+            logger.info(f"✅ {symbol}: {len(df)} velas, Precio: ${df['close'].iloc[-1]:.2f}")
             return df
             
         except Exception as e:
@@ -122,406 +88,431 @@ class DataFetcher:
             return None
 
 class FeatureEngineer:
-    """Ingeniería de características avanzada"""
+    """Ingeniería de características simplificada"""
     
     @staticmethod
-    def create_features(df: pd.DataFrame) -> pd.DataFrame:
-        """Crea features técnicas usando múltiples indicadores"""
+    def add_basic_features(df: pd.DataFrame) -> pd.DataFrame:
+        """Añade features básicas pero efectivas"""
         df = df.copy()
         
-        # Precios y retornos
-        df['returns'] = df['close'].pct_change()
-        df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
+        # Precios
+        close = df['close']
         
-        # Momentum indicators
-        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-        df['stoch_k'] = ta.momentum.StochasticOscillator(
-            df['high'], df['low'], df['close'], window=14, smooth_window=3
-        ).stoch()
-        df['stoch_d'] = ta.momentum.StochasticOscillator(
-            df['high'], df['low'], df['close'], window=14, smooth_window=3
-        ).stoch_signal()
-        df['macd'] = ta.trend.MACD(df['close']).macd()
-        df['macd_signal'] = ta.trend.MACD(df['close']).macd_signal()
-        df['macd_diff'] = ta.trend.MACD(df['close']).macd_diff()
+        # 1. RETORNOS
+        df['returns_1h'] = close.pct_change(1)
+        df['returns_4h'] = close.pct_change(4)
+        df['returns_12h'] = close.pct_change(12)
+        df['returns_24h'] = close.pct_change(24)
         
-        # Trend indicators
-        df['ema_12'] = ta.trend.EMAIndicator(df['close'], window=12).ema_indicator()
-        df['ema_26'] = ta.trend.EMAIndicator(df['close'], window=26).ema_indicator()
-        df['sma_20'] = ta.trend.SMAIndicator(df['close'], window=20).sma_indicator()
-        df['sma_50'] = ta.trend.SMAIndicator(df['close'], window=50).sma_indicator()
-        df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
+        # 2. MEDIAS MÓVILES (evitar muchas)
+        df['sma_20'] = close.rolling(20).mean()
+        df['sma_50'] = close.rolling(50).mean()
+        df['ema_12'] = close.ewm(span=12, adjust=False).mean()
+        df['ema_26'] = close.ewm(span=26, adjust=False).mean()
         
-        # Volatility indicators
-        df['bb_upper'] = ta.volatility.BollingerBands(df['close']).bollinger_hband()
-        df['bb_lower'] = ta.volatility.BollingerBands(df['close']).bollinger_lband()
-        df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['close']
-        df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+        # 3. RSI
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
         
-        # Volume indicators
-        df['obv'] = ta.volume.OnBalanceVolumeIndicator(df['close'], df['volume']).on_balance_volume()
-        df['volume_sma'] = df['volume'].rolling(window=20).mean()
+        # 4. MACD
+        df['macd'] = df['ema_12'] - df['ema_26']
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        
+        # 5. BOLLINGER BANDS
+        df['bb_middle'] = close.rolling(20).mean()
+        bb_std = close.rolling(20).std()
+        df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+        df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+        df['bb_position'] = (close - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
+        # 6. ATR (Volatilidad)
+        high_low = df['high'] - df['low']
+        high_close = (df['high'] - close.shift()).abs()
+        low_close = (df['low'] - close.shift()).abs()
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        df['atr'] = tr.rolling(14).mean()
+        df['atr_pct'] = df['atr'] / close
+        
+        # 7. VOLUMEN
+        df['volume_sma'] = df['volume'].rolling(20).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
-        # Support/Resistance
-        df['pivot_point'] = (df['high'].shift(1) + df['low'].shift(1) + df['close'].shift(1)) / 3
-        df['r1'] = 2 * df['pivot_point'] - df['low'].shift(1)
-        df['s1'] = 2 * df['pivot_point'] - df['high'].shift(1)
+        # 8. TENDENCIA
+        df['trend'] = (df['sma_20'] > df['sma_50']).astype(int)
         
-        # Price action
-        df['high_low_pct'] = (df['high'] - df['low']) / df['close']
-        df['close_open_pct'] = (df['close'] - df['open']) / df['open']
+        # 9. MOMENTUM
+        df['momentum_12h'] = close / close.shift(12) - 1
         
-        # Statistical features
-        for window in [6, 12, 24]:
-            df[f'volatility_{window}'] = df['returns'].rolling(window).std()
-            df[f'skew_{window}'] = df['returns'].rolling(window).skew()
-            df[f'kurtosis_{window}'] = df['returns'].rolling(window).kurt()
+        # 10. SOPORTE/RESISTENCIA simple
+        df['high_24h'] = df['high'].rolling(24).max()
+        df['low_24h'] = df['low'].rolling(24).min()
+        df['position_range'] = (close - df['low_24h']) / (df['high_24h'] - df['low_24h'])
         
-        # Lag features
-        for lag in [1, 2, 3, 4, 6]:
-            df[f'close_lag_{lag}'] = df['close'].shift(lag)
-            df[f'volume_lag_{lag}'] = df['volume'].shift(lag)
-        
-        # Target encoding-like features
-        df['close_sma_ratio'] = df['close'] / df['sma_20']
-        df['high_52w'] = df['high'].rolling(24*7*52).max()  # 52 semanas en horas
-        df['low_52w'] = df['low'].rolling(24*7*52).min()
-        df['position_52w'] = (df['close'] - df['low_52w']) / (df['high_52w'] - df['low_52w'])
-        
-        # Interaction features
-        df['rsi_volume'] = df['rsi'] * df['volume_ratio']
-        df['macd_volatility'] = df['macd'] * df['volatility_12']
-        
-        # Clean NaN values
+        # Eliminar NaN iniciales
         df = df.dropna()
         
-        logger.info(f"Features creadas: {len(df.columns)} columnas")
+        logger.info(f"Features creadas: {len(df.columns)} columnas, {len(df)} filas válidas")
         return df
 
 class LabelGenerator:
-    """Generación de labels para ML"""
+    """Generación de etiquetas robusta"""
     
     @staticmethod
-    def triple_barrier_labels(
-        df: pd.DataFrame, 
-        horizon: int = 24,
-        upper_barrier: float = 0.04,
-        lower_barrier: float = -0.02
-    ) -> pd.Series:
+    def create_labels(df: pd.DataFrame, horizon_hours: int = 4) -> pd.Series:
         """
-        Método triple barrier labeling
-        Returns: 1 (compra), 0 (venta), -1 (mantener)
+        Crea etiquetas binarias basadas en movimiento futuro
+        1 = precio sube más del 1% en horizon_hours
+        0 = precio baja más del 1% en horizon_hours
+        NaN = movimiento insuficiente (no operar)
         """
-        prices = df['close'].values
-        labels = np.zeros(len(prices))
+        # Precio futuro
+        future_price = df['close'].shift(-horizon_hours)
         
-        for i in range(len(prices) - horizon):
-            current_price = prices[i]
-            future_prices = prices[i+1:i+horizon+1]
-            
-            # Calcular retornos máximos y mínimos
-            max_return = np.max(future_prices) / current_price - 1
-            min_return = np.min(future_prices) / current_price - 1
-            
-            # Aplicar barreras
-            if max_return >= upper_barrier:
-                # Tocó barrera superior primero -> señal de compra
-                labels[i] = 1
-            elif min_return <= lower_barrier:
-                # Tocó barrera inferior primero -> señal de venta
-                labels[i] = 0
-            else:
-                # No tocó ninguna barrera -> mantener
-                labels[i] = -1
-        
-        # Reemplazar -1 con NaN para eliminar esas muestras
-        labels = pd.Series(labels, index=df.index)
-        labels = labels.replace(-1, np.nan)
-        
-        return labels
-    
-    @staticmethod
-    def volatility_adjusted_labels(
-        df: pd.DataFrame,
-        horizon: int = 24,
-        volatility_lookback: int = 24
-    ) -> pd.Series:
-        """Labels ajustados por volatilidad"""
-        returns = df['close'].pct_change(horizon).shift(-horizon)
-        volatility = df['close'].pct_change().rolling(volatility_lookback).std()
+        # Retorno futuro
+        future_return = (future_price / df['close'] - 1)
         
         # Umbral dinámico basado en volatilidad
-        threshold = volatility * 1.5
+        volatility = df['returns_1h'].rolling(24).std().fillna(0.01)
+        threshold = volatility * 1.5  # 1.5x la volatilidad
+        threshold = threshold.clip(lower=0.005, upper=0.02)  # Entre 0.5% y 2%
         
+        # Crear etiquetas
         labels = pd.Series(np.nan, index=df.index)
-        labels[returns > threshold] = 1  # LONG
-        labels[returns < -threshold] = 0  # SHORT
+        labels[future_return > threshold] = 1   # COMPRAR
+        labels[future_return < -threshold] = 0  # VENDER
+        
+        # Estadísticas
+        n_buy = (labels == 1).sum()
+        n_sell = (labels == 0).sum()
+        total = n_buy + n_sell
+        
+        if total > 0:
+            logger.info(f"Etiquetas: BUY={n_buy} ({n_buy/total:.1%}), SELL={n_sell} ({n_sell/total:.1%})")
         
         return labels
 
-class ModelFactory:
-    """Factory para crear diferentes modelos de ML"""
+class TradingModel:
+    """Modelo de ML simplificado pero efectivo"""
     
-    @staticmethod
-    def get_model(model_type: str):
-        """Retorna modelo configurado"""
-        models = {
-            'xgboost': XGBClassifier(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'lightgbm': LGBMClassifier(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                n_jobs=-1,
-                verbose=-1
-            ),
-            'random_forest': RandomForestClassifier(
-                n_estimators=100,
-                max_depth=10,
-                min_samples_split=20,
-                min_samples_leaf=10,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'gradient_boosting': GradientBoostingClassifier(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                subsample=0.8,
-                random_state=42
-            ),
-            'svm': SVC(
-                C=1.0,
-                kernel='rbf',
-                probability=True,
-                random_state=42
-            ),
-            'logistic': LogisticRegression(
-                C=1.0,
-                max_iter=1000,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'mlp': MLPClassifier(
-                hidden_layer_sizes=(100, 50),
-                max_iter=500,
-                random_state=42
-            ),
-            'catboost': CatBoostClassifier(
-                iterations=100,
-                depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                verbose=False
-            )
-        }
-        return models.get(model_type, models['xgboost'])
-
-class EnsembleModel:
-    """Ensemble de múltiples modelos"""
-    
-    def __init__(self, config: Config):
-        self.config = config
-        self.models = {}
-        self.scaler = RobustScaler()
-        self.feature_columns = None
+    def __init__(self):
+        self.model = None
+        self.features = None
+        self.scaler = None
         
     def select_features(self, X: pd.DataFrame, y: pd.Series) -> List[str]:
-        """Selección de features usando importancia de Random Forest"""
-        from sklearn.feature_selection import SelectFromModel
+        """Selecciona las mejores features"""
+        from sklearn.ensemble import RandomForestClassifier
         
-        selector = RandomForestClassifier(n_estimators=50, random_state=42)
-        selector.fit(X, y)
+        # Features base
+        base_features = [
+            'returns_1h', 'returns_4h', 'returns_12h', 'returns_24h',
+            'rsi', 'macd', 'macd_hist', 'bb_position', 'atr_pct',
+            'volume_ratio', 'trend', 'momentum_12h', 'position_range'
+        ]
         
-        # Seleccionar features con importancia > percentil 75
-        importances = selector.feature_importances_
-        threshold = np.percentile(importances, 75)
+        # Filtrar features disponibles
+        available = [f for f in base_features if f in X.columns]
         
-        selected = X.columns[importances > threshold].tolist()
-        logger.info(f"Seleccionadas {len(selected)}/{len(X.columns)} features")
+        # Usar RandomForest para importancia
+        rf = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
+        rf.fit(X[available].fillna(0), y)
         
+        # Seleccionar top features
+        importance = pd.Series(rf.feature_importances_, index=available)
+        selected = importance.nlargest(10).index.tolist()
+        
+        logger.info(f"Top 5 features: {selected[:5]}")
         return selected
     
     def train(self, X_train: pd.DataFrame, y_train: pd.Series):
-        """Entrena ensemble de modelos"""
+        """Entrena modelo XGBoost"""
+        from xgboost import XGBClassifier
+        from sklearn.preprocessing import StandardScaler
+        
         # Seleccionar features
-        self.feature_columns = self.select_features(X_train, y_train)
-        X_train_selected = X_train[self.feature_columns]
+        self.features = self.select_features(X_train, y_train)
         
-        # Escalar datos
-        X_train_scaled = self.scaler.fit_transform(X_train_selected)
+        if len(self.features) < 5:
+            logger.warning("Features insuficientes")
+            return False
         
-        # Entrenar cada modelo
-        for model_name in self.config.MODELS[:3]:  # Máximo 3 modelos para velocidad
-            try:
-                logger.info(f"Entrenando {model_name}...")
-                model = ModelFactory.get_model(model_name)
-                
-                # Entrenamiento con cross-validation reducida
-                model.fit(X_train_scaled, y_train)
-                self.models[model_name] = model
-                logger.info(f"✅ {model_name} entrenado")
-                
-            except Exception as e:
-                logger.warning(f"Error entrenando {model_name}: {e}")
+        # Preparar datos
+        X = X_train[self.features].fillna(0)
+        y = y_train.values
         
-        # Crear ensemble por votación
-        if len(self.models) >= 2:
-            estimators = [(name, model) for name, model in self.models.items()]
-            self.ensemble = VotingClassifier(
-                estimators=estimators,
-                voting='soft',
-                n_jobs=-1
-            )
-            self.ensemble.fit(X_train_scaled, y_train)
-            logger.info(f"Ensemble creado con {len(self.models)} modelos")
+        # Escalar
+        self.scaler = StandardScaler()
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Entrenar modelo (hiperparámetros optimizados)
+        self.model = XGBClassifier(
+            n_estimators=100,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=-1,
+            eval_metric='logloss'
+        )
+        
+        self.model.fit(X_scaled, y)
+        
+        # Validación simple
+        train_pred = self.model.predict(X_scaled)
+        accuracy = (train_pred == y).mean()
+        
+        logger.info(f"Modelo entrenado - Accuracy: {accuracy:.2%}")
+        return accuracy > 0.52
     
     def predict(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """Predicción con ensemble"""
-        if not self.models:
+        """Predicciones"""
+        if self.model is None or self.features is None:
             return np.zeros(len(X)), np.zeros(len(X))
         
-        X_selected = X[self.feature_columns]
-        X_scaled = self.scaler.transform(X_selected)
+        # Preparar datos
+        X_data = X[self.features].fillna(0)
+        X_scaled = self.scaler.transform(X_data)
         
-        # Predicción del ensemble
-        if hasattr(self, 'ensemble'):
-            probabilities = self.ensemble.predict_proba(X_scaled)
-            predictions = self.ensemble.predict(X_scaled)
-        else:
-            # Promedio de probabilidades de todos los modelos
-            all_probs = []
-            for model in self.models.values():
-                probs = model.predict_proba(X_scaled)
-                all_probs.append(probs)
-            
-            probabilities = np.mean(all_probs, axis=0)
-            predictions = np.argmax(probabilities, axis=1)
+        # Predecir
+        predictions = self.model.predict(X_scaled)
+        probabilities = self.model.predict_proba(X_scaled)[:, 1]
         
-        return predictions, probabilities[:, 1]  # Probabilidad clase positiva
+        return predictions, probabilities
 
-class TradingSignals:
-    """Generador de señales de trading"""
+class SignalGenerator:
+    """Genera señales de trading con filtros"""
     
     def __init__(self, config: Config):
         self.config = config
         
-    def generate_signals(
-        self, 
-        df: pd.DataFrame, 
-        predictions: np.ndarray,
-        probabilities: np.ndarray
-    ) -> pd.DataFrame:
-        """Genera señales de trading con filtros"""
+    def generate(self, df: pd.DataFrame, predictions: np.ndarray, 
+                 probabilities: np.ndarray) -> pd.DataFrame:
+        """Genera señales con múltiples filtros"""
         signals = pd.DataFrame(index=df.index)
         signals['prediction'] = predictions
         signals['probability'] = probabilities
         
-        # Aplicar filtros
-        signals['signal'] = 0  # 0: no operar, 1: comprar, -1: vender
+        # 1. Señal base
+        signals['base_signal'] = 0
+        signals.loc[signals['prediction'] == 1, 'base_signal'] = 1
+        signals.loc[signals['prediction'] == 0, 'base_signal'] = -1
         
-        # Filtro de confianza
-        high_confidence = signals['probability'] > self.config.CONFIDENCE_THRESHOLD
+        # 2. Filtro de confianza
+        signals['signal'] = 0
+        high_conf = signals['probability'] > self.config.CONFIDENCE_THRESHOLD
+        signals.loc[(signals['base_signal'] == 1) & high_conf, 'signal'] = 1
+        signals.loc[(signals['base_signal'] == -1) & high_conf, 'signal'] = -1
         
-        # Señal de compra
-        buy_signal = (signals['prediction'] == 1) & high_confidence
-        signals.loc[buy_signal, 'signal'] = 1
-        
-        # Señal de venta
-        sell_signal = (signals['prediction'] == 0) & high_confidence
-        signals.loc[sell_signal, 'signal'] = -1
-        
-        # Filtro RSI (evitar sobrecompra/sobreventa)
+        # 3. Filtro RSI (evitar extremos)
         if 'rsi' in df.columns:
             overbought = df['rsi'] > 70
             oversold = df['rsi'] < 30
-            
-            # Ajustar señales
             signals.loc[(signals['signal'] == 1) & overbought, 'signal'] = 0
             signals.loc[(signals['signal'] == -1) & oversold, 'signal'] = 0
         
-        # Filtro de tendencia (EMA)
-        if 'ema_12' in df.columns and 'ema_26' in df.columns:
-            uptrend = df['ema_12'] > df['ema_26']
-            downtrend = df['ema_12'] < df['ema_26']
-            
-            # Preferir operaciones en dirección de la tendencia
-            signals.loc[(signals['signal'] == 1) & downtrend, 'probability'] *= 0.7
-            signals.loc[(signals['signal'] == -1) & uptrend, 'probability'] *= 0.7
+        # 4. Filtro de tendencia
+        if 'trend' in df.columns:
+            # En tendencia alcista, evitar vender
+            signals.loc[(signals['signal'] == -1) & (df['trend'] == 1), 'signal'] = 0
+            # En tendencia bajista, evitar comprar
+            signals.loc[(signals['signal'] == 1) & (df['trend'] == 0), 'signal'] = 0
         
-        # Eliminar señales consecutivas del mismo tipo
-        signals['signal_changed'] = signals['signal'].diff().fillna(0) != 0
-        signals.loc[~signals['signal_changed'], 'signal'] = 0
+        # 5. Eliminar señales consecutivas iguales
+        signals['prev_signal'] = signals['signal'].shift(1)
+        same_signal = signals['signal'] == signals['prev_signal']
+        signals.loc[same_signal, 'signal'] = 0
         
-        logger.info(f"Señales generadas: {len(signals[signals['signal'] != 0])} operaciones")
+        # Estadísticas
+        buy_signals = (signals['signal'] == 1).sum()
+        sell_signals = (signals['signal'] == -1).sum()
+        
+        logger.info(f"Señales generadas: {buy_signals} BUY, {sell_signals} SELL")
         
         return signals[['signal', 'probability']]
 
-class FastBacktester:
-    """Backtesting rápido usando vectorbt"""
+class Backtester:
+    """Backtesting rápido y realista"""
     
     def __init__(self, config: Config):
         self.config = config
         
-    def run(
-        self, 
-        df: pd.DataFrame, 
-        signals: pd.DataFrame
-    ) -> Dict:
-        """Ejecuta backtesting con vectorbt"""
+    def run(self, df: pd.DataFrame, signals: pd.DataFrame) -> Dict:
+        """Ejecuta backtesting simple pero efectivo"""
         try:
-            # Precios
-            close = df['close']
+            # Inicializar
+            cash = 10000
+            position = 0
+            trades = []
+            equity = [cash]
             
-            # Señales
-            entries = signals['signal'] == 1
-            exits = signals['signal'] == -1
+            for i in range(1, len(df)):
+                current_price = df['close'].iloc[i]
+                signal = signals['signal'].iloc[i]
+                
+                # Cerrar posición si hay señal contraria o stop/take
+                if position != 0:
+                    entry_price = trades[-1]['entry_price']
+                    
+                    # Calcular P&L
+                    if position > 0:  # Long
+                        pl_pct = (current_price - entry_price) / entry_price
+                        stop_loss = entry_price * (1 - self.config.STOP_LOSS_PCT)
+                        take_profit = entry_price * (1 + self.config.TAKE_PROFIT_PCT)
+                    else:  # Short
+                        pl_pct = (entry_price - current_price) / entry_price
+                        stop_loss = entry_price * (1 + self.config.STOP_LOSS_PCT)
+                        take_profit = entry_price * (1 - self.config.TAKE_PROFIT_PCT)
+                    
+                    # Verificar cierres
+                    close_trade = False
+                    close_reason = ""
+                    
+                    if position > 0:
+                        if current_price <= stop_loss:
+                            close_trade = True
+                            close_reason = "SL"
+                        elif current_price >= take_profit:
+                            close_trade = True
+                            close_reason = "TP"
+                        elif signal == -1:
+                            close_trade = True
+                            close_reason = "SIGNAL"
+                    else:
+                        if current_price >= stop_loss:
+                            close_trade = True
+                            close_reason = "SL"
+                        elif current_price <= take_profit:
+                            close_trade = True
+                            close_reason = "TP"
+                        elif signal == 1:
+                            close_trade = True
+                            close_reason = "SIGNAL"
+                    
+                    if close_trade:
+                        # Aplicar comisión
+                        commission = abs(position * current_price) * self.config.COMMISSION
+                        
+                        # Actualizar cash
+                        cash += position * current_price - commission
+                        position = 0
+                        
+                        # Registrar trade
+                        trades[-1].update({
+                            'exit_price': current_price,
+                            'exit_time': df.index[i],
+                            'pnl_pct': pl_pct,
+                            'commission': commission,
+                            'reason': close_reason
+                        })
+                
+                # Abrir nueva posición
+                if position == 0 and signal != 0:
+                    # Tamaño de posición (10% del capital)
+                    position_size = cash * 0.1 / current_price
+                    
+                    if signal == 1:  # BUY
+                        position = position_size
+                        trade_type = "LONG"
+                    else:  # SELL
+                        position = -position_size
+                        trade_type = "SHORT"
+                    
+                    # Comisión de entrada
+                    commission = abs(position * current_price) * self.config.COMMISSION
+                    cash -= commission
+                    
+                    # Registrar trade
+                    trades.append({
+                        'entry_time': df.index[i],
+                        'entry_price': current_price,
+                        'type': trade_type,
+                        'position': position,
+                        'commission_entry': commission,
+                        'signal_strength': signals['probability'].iloc[i]
+                    })
+                
+                # Calcular equity
+                current_equity = cash + (position * current_price if position != 0 else 0)
+                equity.append(current_equity)
             
-            # Crear portfolio
-            pf = vbt.Portfolio.from_signals(
-                close=close,
-                entries=entries,
-                exits=exits,
-                fees=self.config.COMMISSION,
-                freq='1h'
-            )
+            # Cerrar posición final si queda abierta
+            if position != 0 and trades:
+                last_price = df['close'].iloc[-1]
+                entry_price = trades[-1]['entry_price']
+                
+                if position > 0:
+                    pl_pct = (last_price - entry_price) / entry_price
+                else:
+                    pl_pct = (entry_price - last_price) / entry_price
+                
+                commission = abs(position * last_price) * self.config.COMMISSION
+                trades[-1].update({
+                    'exit_price': last_price,
+                    'exit_time': df.index[-1],
+                    'pnl_pct': pl_pct,
+                    'commission_exit': commission,
+                    'reason': 'END'
+                })
             
-            # Métricas
-            stats = pf.stats()
+            # Calcular métricas
+            equity_series = pd.Series(equity, index=df.index[:len(equity)])
+            returns = equity_series.pct_change().dropna()
             
-            # Calcular métricas adicionales
-            returns = pf.returns()
-            sharpe = pf.sharpe_ratio()
-            max_dd = pf.max_drawdown()
-            
-            results = {
-                'total_return': stats['Total Return [%]'],
-                'sharpe': sharpe,
-                'max_drawdown': max_dd,
-                'win_rate': stats['Win Rate [%]'],
-                'profit_factor': stats['Profit Factor'],
-                'total_trades': stats['Total Trades'],
-                'avg_trade': stats['Avg Trade [%]']
-            }
-            
-            # Equity curve
-            equity = pf.value()
+            if len(trades) > 0:
+                winning_trades = [t for t in trades if 'pnl_pct' in t and t['pnl_pct'] > 0]
+                losing_trades = [t for t in trades if 'pnl_pct' in t and t['pnl_pct'] <= 0]
+                
+                win_rate = len(winning_trades) / len(trades)
+                avg_win = np.mean([t['pnl_pct'] for t in winning_trades]) if winning_trades else 0
+                avg_loss = np.mean([t['pnl_pct'] for t in losing_trades]) if losing_trades else 0
+                
+                total_return = (equity_series.iloc[-1] / 10000 - 1) * 100
+                
+                # Sharpe Ratio (asumiendo 0% risk-free rate)
+                sharpe = returns.mean() / returns.std() * np.sqrt(365*24) if returns.std() > 0 else 0
+                
+                # Max Drawdown
+                cum_returns = (1 + returns).cumprod()
+                running_max = cum_returns.cummax()
+                drawdown = (cum_returns / running_max - 1)
+                max_drawdown = drawdown.min()
+                
+                # Profit Factor
+                gross_profit = sum(t['pnl_pct'] for t in winning_trades if 'pnl_pct' in t)
+                gross_loss = abs(sum(t['pnl_pct'] for t in losing_trades if 'pnl_pct' in t))
+                profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.inf
+                
+                results = {
+                    'total_trades': len(trades),
+                    'winning_trades': len(winning_trades),
+                    'losing_trades': len(losing_trades),
+                    'win_rate': win_rate,
+                    'avg_win_pct': avg_win * 100,
+                    'avg_loss_pct': avg_loss * 100,
+                    'profit_factor': profit_factor,
+                    'total_return_pct': total_return,
+                    'sharpe_ratio': sharpe,
+                    'max_drawdown_pct': max_drawdown * 100,
+                    'final_equity': equity_series.iloc[-1]
+                }
+            else:
+                results = {
+                    'total_trades': 0,
+                    'total_return_pct': 0,
+                    'sharpe_ratio': 0,
+                    'max_drawdown_pct': 0,
+                    'final_equity': 10000
+                }
             
             return {
                 'metrics': results,
-                'equity_curve': equity,
-                'portfolio': pf
+                'trades': trades,
+                'equity_curve': equity_series
             }
             
         except Exception as e:
@@ -529,75 +520,67 @@ class FastBacktester:
             return None
 
 class TradingSystem:
-    """Sistema principal de trading"""
+    """Sistema principal"""
     
-    def __init__(self, config: Config):
-        self.config = config
-        self.data_fetcher = DataFetcher()
+    def __init__(self):
+        self.config = Config()
+        self.data_handler = DataHandler()
         self.feature_engineer = FeatureEngineer()
         self.label_generator = LabelGenerator()
-        self.ensemble_model = EnsembleModel(config)
-        self.signal_generator = TradingSignals(config)
-        self.backtester = FastBacktester(config)
+        self.model = TradingModel()
+        self.signal_generator = SignalGenerator(self.config)
+        self.backtester = Backtester(self.config)
         
     def process_symbol(self, symbol: str) -> Optional[Dict]:
         """Procesa un símbolo completo"""
         try:
             logger.info(f"\n{'='*60}")
-            logger.info(f"Procesando: {symbol}")
+            logger.info(f"PROCESANDO: {symbol}")
             logger.info(f"{'='*60}")
             
             # 1. Obtener datos
-            df = self.data_fetcher.fetch_data(
-                symbol, 
-                self.config.INTERVAL, 
-                self.config.TRAIN_DAYS + self.config.TEST_DAYS
-            )
-            
-            if df is None or len(df) < 100:
+            df = self.data_handler.get_data(symbol, self.config.TRAIN_DAYS + self.config.TEST_DAYS)
+            if df is None or len(df) < 200:
                 logger.warning(f"Datos insuficientes para {symbol}")
                 return None
             
             # 2. Crear features
-            df_features = self.feature_engineer.create_features(df)
+            df_features = self.feature_engineer.add_basic_features(df)
+            if len(df_features) < 100:
+                logger.warning(f"Features insuficientes después de limpieza")
+                return None
             
-            # 3. Split train/test
+            # 3. Split train/test (70/30)
             split_idx = int(len(df_features) * 0.7)
-            train_data = df_features.iloc[:split_idx]
-            test_data = df_features.iloc[split_idx:]
+            train_data = df_features.iloc[:split_idx].copy()
+            test_data = df_features.iloc[split_idx:].copy()
             
             logger.info(f"Train: {len(train_data)} | Test: {len(test_data)}")
             
             # 4. Generar labels para training
-            labels = self.label_generator.volatility_adjusted_labels(
-                train_data, 
-                horizon=24
-            )
+            labels = self.label_generator.create_labels(train_data)
             
-            # Preparar datos para ML
-            train_data_clean = train_data.dropna()
-            labels_clean = labels.dropna()
+            # Filtrar datos con labels válidas
+            valid_idx = labels.dropna().index
+            X_train = train_data.loc[valid_idx]
+            y_train = labels.loc[valid_idx]
             
-            # Alinear índices
-            common_idx = train_data_clean.index.intersection(labels_clean.index)
-            X_train = train_data_clean.loc[common_idx]
-            y_train = labels_clean.loc[common_idx]
-            
-            if len(X_train) < 100:
+            if len(X_train) < 50:
                 logger.warning(f"Datos de entrenamiento insuficientes")
                 return None
             
             # 5. Entrenar modelo
-            self.ensemble_model.train(X_train, y_train)
+            logger.info("Entrenando modelo...")
+            if not self.model.train(X_train, y_train):
+                logger.warning(f"Modelo no pudo ser entrenado para {symbol}")
+                return None
             
             # 6. Predecir en test
             X_test = test_data
-            predictions, probabilities = self.ensemble_model.predict(X_test)
+            predictions, probabilities = self.model.predict(X_test)
             
             # 7. Generar señales
-            signals = self.signal_generator.generate_signals(
-                X_test, predictions, probabilities
-            )
+            signals = self.signal_generator.generate(X_test, predictions, probabilities)
             
             # 8. Backtest
             backtest_results = self.backtester.run(X_test, signals)
@@ -605,23 +588,29 @@ class TradingSystem:
             if backtest_results is None:
                 return None
             
-            # 9. Resultados
+            # 9. Preparar resultados
             results = {
                 'symbol': symbol,
                 'data_points': len(df),
                 'train_samples': len(X_train),
                 'test_samples': len(X_test),
-                'signals_generated': len(signals[signals['signal'] != 0]),
-                'backtest': backtest_results['metrics'],
-                'model_info': {
-                    'models_trained': list(self.ensemble_model.models.keys()),
-                    'features_used': len(self.ensemble_model.feature_columns)
-                }
+                'signals': len(signals[signals['signal'] != 0]),
+                'trades': backtest_results['metrics']['total_trades'],
+                'win_rate': backtest_results['metrics']['win_rate'],
+                'total_return': backtest_results['metrics']['total_return_pct'],
+                'sharpe': backtest_results['metrics']['sharpe_ratio'],
+                'max_dd': backtest_results['metrics']['max_drawdown_pct'],
+                'profit_factor': backtest_results['metrics'].get('profit_factor', 0)
             }
             
-            logger.info(f"\n📊 Resultados {symbol}:")
-            for key, value in results['backtest'].items():
-                logger.info(f"  {key}: {value}")
+            # Mostrar resultados
+            logger.info(f"\n📊 RESULTADOS {symbol}:")
+            logger.info(f"  Operaciones: {results['trades']}")
+            logger.info(f"  Win Rate: {results['win_rate']:.1%}")
+            logger.info(f"  Retorno Total: {results['total_return']:.2f}%")
+            logger.info(f"  Sharpe Ratio: {results['sharpe']:.2f}")
+            logger.info(f"  Max Drawdown: {results['max_dd']:.2f}%")
+            logger.info(f"  Profit Factor: {results['profit_factor']:.2f}")
             
             return results
             
@@ -631,28 +620,22 @@ class TradingSystem:
 
 def main():
     """Función principal"""
-    logger.info("🚀 Iniciando Sistema de Trading Cuantitativo")
+    logger.info("🚀 SISTEMA DE TRADING CUANTITATIVO v3.1")
     logger.info("=" * 60)
     
-    # Configuración
-    config = Config()
+    # Crear sistema
+    system = TradingSystem()
     
-    # Limitar symbols para GitHub Actions
-    symbols = config.SYMBOLS[:config.MAX_SYMBOLS]
-    
-    # Sistema
-    system = TradingSystem(config)
-    
-    # Procesar cada symbol
+    # Procesar símbolos
     all_results = {}
     
-    for symbol in symbols:
+    for symbol in system.config.SYMBOLS[:4]:  # Procesar solo 4 para velocidad
         try:
             result = system.process_symbol(symbol)
             if result:
                 all_results[symbol] = result
         except Exception as e:
-            logger.error(f"Error crítico con {symbol}: {e}")
+            logger.error(f"Error con {symbol}: {e}")
             continue
     
     # Resumen final
@@ -661,41 +644,36 @@ def main():
     logger.info("=" * 60)
     
     if not all_results:
-        logger.warning("No se obtuvieron resultados")
-        return
+        logger.warning("No se obtuvieron resultados válidos")
+        return None
     
-    # Estadísticas generales
-    total_trades = sum(r['backtest']['total_trades'] for r in all_results.values())
-    avg_return = np.mean([r['backtest']['total_return'] for r in all_results.values()])
-    avg_sharpe = np.mean([r['backtest']['sharpe'] for r in all_results.values()])
+    # Calcular estadísticas
+    total_trades = sum(r['trades'] for r in all_results.values())
+    avg_return = np.mean([r['total_return'] for r in all_results.values()])
+    avg_sharpe = np.mean([r['sharpe'] for r in all_results.values()])
+    avg_win_rate = np.mean([r['win_rate'] for r in all_results.values()])
     
-    logger.info(f"Símbolos procesados: {len(all_results)}/{len(symbols)}")
+    logger.info(f"Símbolos procesados: {len(all_results)}")
     logger.info(f"Operaciones totales: {total_trades}")
     logger.info(f"Retorno promedio: {avg_return:.2f}%")
     logger.info(f"Sharpe promedio: {avg_sharpe:.2f}")
+    logger.info(f"Win Rate promedio: {avg_win_rate:.1%}")
     
-    # Mejores símbolos
+    # Mejor y peor
     if all_results:
-        best_symbol = max(all_results.items(), key=lambda x: x[1]['backtest']['total_return'])
-        worst_symbol = min(all_results.items(), key=lambda x: x[1]['backtest']['total_return'])
+        best = max(all_results.items(), key=lambda x: x[1]['total_return'])
+        worst = min(all_results.items(), key=lambda x: x[1]['total_return'])
         
-        logger.info(f"\n🏆 Mejor: {best_symbol[0]} ({best_symbol[1]['backtest']['total_return']:.2f}%)")
-        logger.info(f"📉 Peor: {worst_symbol[0]} ({worst_symbol[1]['backtest']['total_return']:.2f}%)")
+        logger.info(f"\n🏆 MEJOR: {best[0]} - {best[1]['total_return']:.2f}%")
+        logger.info(f"📉 PEOR: {worst[0]} - {worst[1]['total_return']:.2f}%")
     
-    # Guardar resultados en GitHub Actions
-    if 'GITHUB_ACTIONS' in os.environ:
-        output_file = 'trading_results.json'
-        with open(output_file, 'w') as f:
-            # Convertir a tipos nativos de Python
-            def convert(obj):
-                if isinstance(obj, (np.integer, np.floating)):
-                    return float(obj)
-                return obj
-            
-            json.dump(all_results, f, default=convert, indent=2)
-        logger.info(f"\n💾 Resultados guardados en {output_file}")
+    # Guardar resultados
+    output_file = 'trading_results.json'
+    with open(output_file, 'w') as f:
+        json.dump(all_results, f, indent=2, default=str)
     
-    logger.info("\n✅ Proceso completado exitosamente")
+    logger.info(f"\n💾 Resultados guardados en {output_file}")
+    logger.info("\n✅ PROCESO COMPLETADO")
     
     return all_results
 
@@ -706,5 +684,5 @@ if __name__ == "__main__":
         logger.info("\n⏹️ Proceso interrumpido")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"\n❌ Error fatal: {e}", exc_info=True)
+        logger.error(f"\n❌ Error fatal: {e}")
         sys.exit(1)
