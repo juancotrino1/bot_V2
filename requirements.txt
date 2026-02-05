@@ -18,7 +18,7 @@ lightgbm>=4.0.0
 
 # === OPTIMIZACIÓN ===
 optuna>=3.3.0
-
+TA-Lib==0.4.28
 # === UTILIDADES ===
 requests>=2.31.0
 # === NOTAS DE INSTALACIÓN ===
