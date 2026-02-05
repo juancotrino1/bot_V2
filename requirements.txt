@@ -19,6 +19,7 @@ lightgbm>=4.0.0
 # === OPTIMIZACIÓN ===
 optuna>=3.3.0
 ta
+talib
 catboost
 vectorbt
 # === UTILIDADES ===
